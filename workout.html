@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#0B0E13">
+<link rel="manifest" href="manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="Pulseline">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<title>Pulseline · Workout</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@600;700&family=IBM+Plex+Mono:wght@500;600&family=Rajdhani:wght@600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0B0E13;--panel:#151A23;--line:#242D3B;--ink:#E9EEF5;--muted:#8A96A8;--faint:#5A667A;
+  --tape:#F0B437;--alert:#FF3B5C;--ok:#4FC98B;
+  --ic:#37A8A0;                 /* current interval color, animated */
+  --mono:'IBM Plex Mono',ui-monospace,monospace;
+  --disp:'Chakra Petch',system-ui,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;overflow:hidden;overscroll-behavior:none}
+body{background:var(--bg);color:var(--ink);font:15px/1.4 system-ui,-apple-system,sans-serif;
+  height:100dvh;user-select:none}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+
+/* ============ splash ============ */
+#splash{height:100dvh;display:flex;flex-direction:column;padding:max(18px,env(safe-area-inset-top)) 18px 18px;gap:14px;overflow-y:auto}
+#splash h1{font-family:var(--disp);font-size:22px;letter-spacing:.05em}
+#splash h1 em{font-style:normal;color:var(--tape)}
+#splash .sub{color:var(--muted);font-size:13px;margin-top:-8px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px 16px;text-align:left}
+button.card:active{border-color:var(--tape)}
+.card .nm{font-family:var(--disp);font-weight:700;font-size:16px;margin-bottom:6px}
+.card .meta{display:flex;flex-wrap:wrap;gap:8px 16px;font-family:var(--mono);font-size:12px;color:var(--muted)}
+.card .meta b{color:var(--ink)}
+.card .warn{color:var(--alert)}
+.card .okc{color:var(--ok)}
+.card .ibar{display:flex;height:8px;border-radius:4px;overflow:hidden;margin-top:10px}
+.note{color:var(--faint);font-size:12.5px;line-height:1.5}
+.btnrow{display:flex;gap:10px}
+.bigbtn{flex:1;font-family:var(--disp);font-weight:700;font-size:15px;padding:14px;border-radius:12px;border:1px solid var(--line);background:var(--panel);text-align:center;text-decoration:none;color:var(--ink)}
+.bigbtn.primary{background:var(--tape);color:#141414;border-color:var(--tape)}
+#clientRow{display:flex;gap:8px}
+#clientRow input{flex:1;font-family:var(--mono);font-size:13px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;color:var(--ink);outline:none}
+
+/* ============ workout mode ============ */
+#work{display:none;height:100dvh;flex-direction:column;
+  background:linear-gradient(180deg,var(--bg) 0%,var(--bg) 34%,
+    color-mix(in srgb,var(--ic) 55%,#0B0E13) 78%,var(--ic) 120%);
+  transition:--ic .6s;padding-bottom:env(safe-area-inset-bottom)}
+#strip{height:31dvh;min-height:170px;position:relative;padding-top:max(8px,env(safe-area-inset-top))}
+#tl{display:block;width:100%;height:100%}
+#hud{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:space-evenly;padding:2px 16px 6px;text-align:center;min-height:0}
+#songLine{font-size:14.5px;color:var(--ink);max-width:94vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#songLine .art{color:var(--muted)}
+#songTime{font-family:var(--mono);font-size:13px;color:var(--muted);margin-top:2px}
+#intName{font-family:var(--disp);font-weight:700;font-size:clamp(21px,6.5vw,34px);letter-spacing:.04em;text-shadow:0 2px 14px rgba(0,0,0,.45)}
+#count{font-family:'Rajdhani',var(--disp);font-weight:700;font-size:clamp(110px,36vw,280px);line-height:.9;
+  letter-spacing:.01em;font-variant-numeric:tabular-nums;text-shadow:0 4px 30px rgba(0,0,0,.5)}
+#totals{font-family:var(--mono);font-size:12px;color:rgba(255,255,255,.66)}
+#controls{display:flex;gap:12px;padding:8px 16px 14px;align-items:center}
+#exitBtn,#pauseBtn{border-radius:14px;border:1px solid rgba(255,255,255,.28);background:rgba(0,0,0,.3);backdrop-filter:blur(4px)}
+#exitBtn{width:64px;height:58px;font-size:20px}
+#pauseBtn{flex:1;height:58px;font-family:var(--disp);font-weight:700;font-size:19px;letter-spacing:.06em}
+#pauseBtn.paused{background:var(--tape);color:#141414;border-color:var(--tape)}
+#liveTag{position:absolute;top:max(10px,env(safe-area-inset-top));right:12px;font-family:var(--mono);font-size:10.5px;
+  padding:2px 9px;border-radius:12px;background:rgba(0,0,0,.4)}
+#liveTag.live{color:var(--ok)}#liveTag.sim{color:var(--muted)}
+#toast{position:fixed;bottom:90px;left:50%;transform:translateX(-50%);background:#0B0E13;border:1px solid var(--line);
+  border-radius:10px;padding:10px 16px;font-size:13px;display:none;z-index:99;max-width:92vw;text-align:center}
+#doneOv{position:fixed;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;gap:14px;
+  background:rgba(6,9,14,.88);z-index:50;text-align:center}
+#doneOv h2{font-family:var(--disp);font-size:30px;color:var(--tape)}
+#doneOv p{font-family:var(--mono);color:var(--muted)}
+</style>
+</head>
+<body>
+
+<div id="splash">
+  <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px">
+    <h1><a href="./" style="color:inherit;text-decoration:none" title="Back to the editor">PULSE<em>LINE</em></a> <span style="font-size:13px;color:var(--faint)">workout mode</span></h1>
+    <a href="calendar.html" style="font-family:var(--disp);font-weight:600;font-size:12.5px;color:var(--tape);
+      text-decoration:none;border:1px solid var(--line);border-radius:8px;padding:7px 12px;white-space:nowrap">Calendar</a>
+  </div>
+  <div class="sub" id="who">Checking Spotify connection…</div>
+  <div id="connectBox" style="display:none">
+    <p class="note" style="margin-bottom:10px">Log into Spotify on this device (one time). Uses the same app Client ID as the desktop dashboard; make sure <b id="ruShow"></b> is added as a redirect URI.</p>
+    <div id="clientRow"><input id="cid" placeholder="Spotify Client ID" spellcheck="false">
+      <button class="bigbtn primary" id="loginBtn" style="flex:0 0 auto">Log in</button></div>
+  </div>
+  <div id="wsList"></div>
+  <p class="note" id="hint"></p>
+</div>
+
+<div id="work">
+  <div id="strip"><canvas id="tl"></canvas><span id="liveTag"></span></div>
+  <div id="hud">
+    <div>
+      <div id="songLine"></div>
+      <div id="songTime"></div>
+    </div>
+    <div id="intName"></div>
+    <div id="count">0:00</div>
+    <div id="totals"></div>
+  </div>
+  <div id="controls">
+    <button id="exitBtn" title="End workout">✕</button>
+    <button id="pauseBtn">PAUSE</button>
+  </div>
+</div>
+
+<div id="doneOv"><h2>WORKOUT COMPLETE</h2><p id="doneStats"></p>
+  <button class="bigbtn primary" id="doneBtn" style="flex:0;padding:14px 40px">Done</button></div>
+<div id="toast"></div>
+
+<script src="config.js"></script>
+<script>
+"use strict";
+const $=s=>document.querySelector(s);
+const fmt=s=>{s=Math.max(0,Math.round(s));const h=Math.floor(s/3600),m=Math.floor(s%3600/60),ss=s%60;
+  return h?`${h}:${String(m).padStart(2,"0")}:${String(ss).padStart(2,"0")}`:`${m}:${String(ss).padStart(2,"0")}`};
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+let toastT;function toast(m,ms=3200){const t=$("#toast");t.textContent=m;t.style.display="block";
+  clearTimeout(toastT);toastT=setTimeout(()=>t.style.display="none",ms)}
+const INTENSITY={low:{label:"LOW",color:"#37A8A0"},medium:{label:"MED",color:"#E7B94F"},
+                 high:{label:"HIGH",color:"#EA7A3B"},peak:{label:"PEAK",color:"#E93E5C"}};
+
+/* ---------- device auth (same localStorage keys as the dashboard) ---------- */
+const LSD={get:(k,d)=>{try{const v=localStorage.getItem("pl_"+k);return v==null?d:JSON.parse(v)}catch(e){return d}},
+           set:(k,v)=>localStorage.setItem("pl_"+k,JSON.stringify(v))};
+const CFG_ID=(typeof window.PULSELINE_CLIENT_ID==="string"&&/^[0-9a-f]{32}$/i.test(window.PULSELINE_CLIENT_ID))
+  ?window.PULSELINE_CLIENT_ID:null;
+const AUTH={get clientId(){return CFG_ID||LSD.get("clientId",null)},set clientId(v){LSD.set("clientId",v)},
+  get tok(){return LSD.get("tok",null)},set tok(v){LSD.set("tok",v)},
+  redirectUri:location.origin+location.pathname};
+const b64url=b=>btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+async function tokenRequest(body){
+  const r=await fetch("https://accounts.spotify.com/api/token",{method:"POST",
+    headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams(body)});
+  if(!r.ok)throw new Error("Spotify login failed ("+r.status+")");
+  const j=await r.json();
+  AUTH.tok={access:j.access_token,refresh:j.refresh_token||(AUTH.tok&&AUTH.tok.refresh),
+    scope:j.scope||(AUTH.tok&&AUTH.tok.scope)||"",exp:Date.now()+(j.expires_in-60)*1000};
+}
+async function login(){
+  const verifier=b64url(crypto.getRandomValues(new Uint8Array(48)));
+  LSD.set("verifier",verifier);
+  const challenge=b64url(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(verifier)));
+  location.href="https://accounts.spotify.com/authorize?"+new URLSearchParams({
+    client_id:AUTH.clientId,response_type:"code",redirect_uri:AUTH.redirectUri,
+    scope:"playlist-read-private playlist-read-collaborative user-read-playback-state user-modify-playback-state",
+    code_challenge_method:"S256",code_challenge:challenge});
+}
+async function ensureToken(){
+  const t=AUTH.tok;if(!t)throw new Error("Not connected");
+  if(Date.now()<t.exp)return t.access;
+  await tokenRequest({grant_type:"refresh_token",refresh_token:t.refresh,client_id:AUTH.clientId});
+  return AUTH.tok.access;
+}
+async function api(path,opts={}){
+  const access=await ensureToken();
+  const r=await fetch("https://api.spotify.com/v1"+path,{method:opts.method||"GET",
+    headers:{Authorization:"Bearer "+access,...(opts.body?{"Content-Type":"application/json"}:{})},
+    body:opts.body?JSON.stringify(opts.body):undefined});
+  if(r.status===429){await new Promise(res=>setTimeout(res,2000));return api(path,opts)}
+  if(!r.ok)throw new Error("Spotify "+r.status);
+  return r.status===204?null:r.json();
+}
+
+/* ---------- workout state ---------- */
+let me=null,workspaces={},W=null;   // W = active run {ws,key,spans,secs,total,plTotal,live}
+const P={t:0,playing:false,last:0,prevSec:-1,slew:0};
+const spansOf=trs=>{let t=0;return trs.map(tr=>{const s={start:t,end:t+tr.durMs/1000,tr};t=s.end;return s})};
+const secsOf=ss=>{let t=0;return ss.map(s=>{const x={start:t,end:t+s.lenSec,s};t=x.end;return x})};
+const at=(arr,t)=>arr.find(x=>t>=x.start&&t<x.end);
+
+/* ---------- splash ---------- */
+function clashCount(spans,secs){let n=0;
+  for(let i=0;i<spans.length-1;i++){const h=at(secs,spans[i].end);if(h&&h.s.intensity==="peak")n++}return n}
+function renderSplash(){
+  const list=$("#wsList");
+  const keys=Object.keys(workspaces).filter(k=>{
+    const w=workspaces[k];return w&&Array.isArray(w.tracks)&&w.tracks.length&&Array.isArray(w.sections)&&w.sections.length});
+  if(!keys.length){
+    list.innerHTML='<div class="card"><div class="nm">No workouts yet</div><div class="note">Build a playlist + interval program in the desktop dashboard first — every playlist with an interval list shows up here automatically.</div></div>';
+    return;
+  }
+  keys.sort((a,b)=>(workspaces[b].updated||0)-(workspaces[a].updated||0));
+  const PAL=["#F0B437","#37A8A0","#E8743B","#E93E5C","#7C6FE0","#4FC98B","#E7B94F","#4EA8DE"];
+  const defC=k=>PAL[[...String(k)].reduce((a,c)=>a+c.charCodeAt(0),0)%PAL.length];
+  list.innerHTML=keys.map(k=>{
+    const w=workspaces[k],spans=spansOf(w.tracks),secs=secsOf(w.sections);
+    const col=w.color||defC(k);
+    const wk=secs.length?secs[secs.length-1].end:0, pl=spans.length?spans[spans.length-1].end:0;
+    const cl=clashCount(spans,secs);
+    const bar=secs.map(x=>`<span style="flex:${x.s.lenSec};background:${x.s.color}"></span>`).join("");
+    return `<button class="card" data-k="${esc(k)}" style="width:100%;margin-bottom:10px;border-left:5px solid ${col}">
+      <div class="nm">${esc(w.name||k)}${k==="demo"?" (demo)":""}</div>
+      <div class="meta"><span>workout <b>${fmt(wk)}</b></span><span>music <b>${fmt(pl)}</b></span>
+        <span>${w.sections.length} intervals</span>
+        <span class="${cl?"warn":"okc"}">${cl?cl+" peak clash"+(cl>1?"es":""):"✓ clean"}</span>
+        ${w.dirty?'<span class="warn">unsaved edits → simulated only</span>':""}</div>
+      <div class="ibar">${bar}</div>
+    </button>`}).join("");
+  $("#hint").textContent="Tip: start your watch workout + open Spotify first, then pick a workout here.";
+}
+$("#wsList").addEventListener("click",e=>{
+  const c=e.target.closest(".card[data-k]");if(c)startWorkout(c.dataset.k);
+});
+
+/* ---------- audio cues ---------- */
+let AC=null,master=null;
+function ensureAudio(){
+  AC=AC||new (window.AudioContext||window.webkitAudioContext)();
+  if(AC.state==="suspended")AC.resume();
+  if(!master){ // compressor lets us run hot without clipping — the dings must beat the music
+    const comp=AC.createDynamicsCompressor();
+    comp.threshold.value=-14;comp.knee.value=8;comp.ratio.value=8;
+    comp.attack.value=.002;comp.release.value=.15;
+    master=AC.createGain();master.gain.value=1;
+    master.connect(comp);comp.connect(AC.destination);
+  }
+}
+function beep(f,t0,dur=.22,vol=1){
+  /* square wave (far more piercing than sine) + an octave partial for presence */
+  [[1,vol],[2,vol*.45]].forEach(([mult,g])=>{
+    const o=AC.createOscillator(),gn=AC.createGain();
+    o.type="square";o.frequency.value=f*mult;
+    gn.gain.setValueAtTime(0,t0);gn.gain.linearRampToValueAtTime(g,t0+.012);
+    gn.gain.exponentialRampToValueAtTime(.001,t0+dur);
+    o.connect(gn).connect(master);o.start(t0);o.stop(t0+dur+.06);
+  });
+}
+function cueSection(intensity){const n=AC.currentTime;
+  if(intensity==="peak"){beep(740,n);beep(880,n+.2);beep(1175,n+.4,.4)}   // rising: go time
+  else{beep(880,n);beep(660,n+.24,.3)}}
+function cueDone(){const n=AC.currentTime;beep(880,n,.25);beep(660,n+.28,.25);beep(440,n+.58,.6)}
+
+/* ---------- wake lock ---------- */
+let wake=null;
+async function grabWake(){try{wake=await navigator.wakeLock.request("screen")}catch(e){}}
+document.addEventListener("visibilitychange",()=>{if(W&&document.visibilityState==="visible")grabWake()});
+
+/* ---------- run lifecycle ---------- */
+async function startWorkout(key){
+  const ws=workspaces[key];
+  const spans=spansOf(ws.tracks),secs=secsOf(ws.sections);
+  W={ws,key,spans,secs,total:secs[secs.length-1].end,
+     plTotal:spans.length?spans[spans.length-1].end:0,
+     live:key!=="demo"&&!ws.dirty};
+  P.t=0;P.prevSec=-1;
+  ensureAudio();
+  $("#splash").style.display="none";$("#work").style.display="flex";
+  $("#liveTag").textContent=W.live?"● LIVE":"SIMULATED";
+  $("#liveTag").className=W.live?"live":"sim";
+  grabWake();
+  if(W.live){
+    try{await api("/me/player/play",{method:"PUT",
+      body:{context_uri:"spotify:playlist:"+key,offset:{position:0},position_ms:0}})}
+    catch(e){W.live=false;$("#liveTag").textContent="SIMULATED";$("#liveTag").className="sim";
+      toast("Couldn't start Spotify — open the app, tap play once, then restart here. Running simulated.")}
+  }
+  setPaused(false);
+  sizeCanvas();draw();updateHud();
+}
+async function logWorkout(completed){
+  if(P.t<60)return;                        // ignore <1-minute false starts
+  if(!window.NS_URL||!W){toast("Workout not logged — no profile connection");return}
+  /* snapshot EVERYTHING synchronously: W is nulled the moment we return to the splash,
+     so nothing after an await may touch it */
+  const entry={id:Math.random().toString(36).slice(2,10),ts:Date.now(),
+    key:W.key,name:W.ws.name||W.key,color:W.ws.color||null,
+    planned:Math.round(W.total),elapsed:Math.round(Math.min(P.t,W.total)),completed:!!completed};
+  const url=window.NS_URL;
+  try{
+    const r=await fetch(url,{cache:"no-store"});
+    const st=r.ok?(await r.json()||{}):{};
+    st.history=st.history||[];
+    st.history.push(entry);
+    const w=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(st)});
+    if(!w.ok)throw new Error("save rejected ("+w.status+")");
+    toast("Workout logged ✓ "+fmt(entry.elapsed));
+  }catch(e){toast("Couldn't log workout: "+e.message,5000)}
+}
+function endWorkout(showDone){
+  if(W&&W.live)api("/me/player/pause",{method:"PUT"}).catch(()=>{});
+  P.playing=false;clearInterval(pollH);pollH=null;
+  logWorkout(showDone);
+  if(wake){wake.release().catch(()=>{});wake=null}
+  if(showDone){cueDone();
+    $("#doneStats").textContent=`${fmt(W.total)} · ${W.ws.sections.length} intervals · ${W.ws.name||""}`;
+    $("#doneOv").style.display="flex";
+  }else backToSplash();
+}
+function backToSplash(){
+  $("#doneOv").style.display="none";
+  $("#work").style.display="none";$("#splash").style.display="flex";
+  W=null;
+}
+$("#doneBtn").onclick=backToSplash;
+$("#exitBtn").onclick=()=>endWorkout(false);
+$("#pauseBtn").onclick=()=>setPaused(P.playing);
+function setPaused(pause){
+  if(!W)return;
+  P.playing=!pause;
+  $("#pauseBtn").textContent=pause?"RESUME":"PAUSE";
+  $("#pauseBtn").classList.toggle("paused",pause);
+  if(W.live)api("/me/player/"+(pause?"pause":"play"),{method:"PUT",
+    body:pause?undefined:undefined}).catch(()=>{});
+  if(P.playing){P.last=performance.now();requestAnimationFrame(tick);startPoll()}
+  else clearInterval(pollH),pollH=null;
+}
+
+/* ---------- clock ---------- */
+function tick(ts){
+  if(!W||!P.playing)return;
+  const dt=Math.min(.25,(ts-P.last)/1000);P.last=ts;
+  P.t+=dt;
+  /* absorb sync corrections gently (max ±12% clock rate) so the countdown never flickers */
+  if(P.slew){const step=Math.sign(P.slew)*Math.min(Math.abs(P.slew),dt*.12);P.t+=step;P.slew-=step}
+  const secIdx=W.secs.findIndex(x=>P.t>=x.start&&P.t<x.end);
+  if(secIdx!==P.prevSec){
+    if(secIdx>=0&&P.prevSec>=0)cueSection(W.secs[secIdx].s.intensity);   // interval boundary ding
+    P.prevSec=secIdx;
+  }
+  if(P.t>=W.total){P.t=W.total;draw();updateHud();endWorkout(true);return}
+  draw();updateHud();
+  requestAnimationFrame(tick);
+}
+let pollH=null;
+function startPoll(){
+  clearInterval(pollH);
+  if(!W||!W.live)return;
+  pollH=setInterval(async()=>{
+    try{
+      const t0=performance.now();
+      const st=await api("/me/player");
+      const rtt=(performance.now()-t0)/1000;
+      if(!st||!st.item)return;
+      if(!st.is_playing){if(P.playing)setPaused(true);return}
+      const uri=st.item.uri;let best=-1,bd=1e12;
+      W.spans.forEach((sp,i)=>{if(W.ws.tracks[i].uri===uri){const d=Math.abs(sp.start-P.t);if(d<bd){bd=d;best=i}}});
+      if(best<0)return;
+      /* latency-compensated server time: progress was snapshotted ~half an RTT ago */
+      const serverT=W.spans[best].start+(st.progress_ms||0)/1000+rtt/2;
+      const d=serverT-P.t;
+      if(Math.abs(d)>2.5){P.t=serverT;P.slew=0;P.last=performance.now()}  // real jump: seek/skip
+      else P.slew=d;                                                       // tiny drift: slew it away
+    }catch(e){}
+  },5000);
+}
+
+/* ---------- HUD ---------- */
+function updateHud(){
+  const sp=at(W.spans,P.t),sx=at(W.secs,P.t);
+  if(sp){$("#songLine").innerHTML=`♪ <b>${esc(sp.tr.name)}</b> <span class="art">— ${esc(sp.tr.artists)}</span>`;
+    $("#songTime").textContent=`${fmt(P.t-sp.start)} / ${fmt(sp.tr.durMs/1000)}`}
+  else{$("#songLine").innerHTML='<span class="art">— music ended —</span>';$("#songTime").textContent=""}
+  if(sx){
+    document.documentElement.style.setProperty("--ic",sx.s.color);
+    $("#intName").textContent=sx.s.name;
+    $("#count").textContent=fmt(sx.end-P.t);
+  }
+  $("#totals").textContent=`T+ ${fmt(P.t)}  ·  ${fmt(W.total-P.t)} to go`;
+}
+
+/* ---------- sliding timeline strip (2-min window, playhead centred) ---------- */
+const cvs=$("#tl"),ctx=cvs.getContext("2d");
+let CW=360,CH=200;
+function sizeCanvas(){
+  const dpr=window.devicePixelRatio||1;
+  CW=cvs.clientWidth;CH=cvs.clientHeight;
+  cvs.width=Math.round(CW*dpr);cvs.height=Math.round(CH*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+window.addEventListener("resize",()=>{if(W){sizeCanvas();draw()}});
+function draw(){
+  const WIN=120,half=WIN/2;
+  const pps=CW/WIN,X=t=>(t-(P.t-half))*pps;
+  ctx.clearRect(0,0,CW,CH);
+  const songY=8,songH=CH*.34,ruleY=songY+songH+6,ruleH=16,secY=ruleY+ruleH+6,secH=CH-secY-8;
+  ctx.textBaseline="middle";
+  /* lanes */
+  ctx.fillStyle="rgba(21,26,35,.85)";
+  ctx.fillRect(0,songY,CW,songH);ctx.fillRect(0,secY,CW,secH);
+  const clip=(x,w)=>({x:Math.max(0,x),w:Math.min(CW,x+w)-Math.max(0,x)});
+  W.spans.forEach((sp,i)=>{
+    if(sp.end<P.t-half||sp.start>P.t+half)return;
+    const c=clip(X(sp.start)+1,(sp.end-sp.start)*pps-2);if(c.w<=0)return;
+    ctx.fillStyle=i%2?"#2A3444":"#39465C";
+    ctx.fillRect(c.x,songY+4,c.w,songH-8);
+    if(c.w>50){ctx.save();ctx.beginPath();ctx.rect(c.x+6,songY,c.w-12,songH);ctx.clip();
+      ctx.fillStyle="#E9EEF5";ctx.font="600 12px system-ui";
+      ctx.fillText(sp.tr.name,c.x+8,songY+songH*.38);
+      ctx.fillStyle="#8A96A8";ctx.font="11px system-ui";
+      ctx.fillText(sp.tr.artists,c.x+8,songY+songH*.72);ctx.restore()}
+  });
+  W.secs.forEach(sx=>{
+    if(sx.end<P.t-half||sx.start>P.t+half)return;
+    const c=clip(X(sx.start)+1,(sx.end-sx.start)*pps-2);if(c.w<=0)return;
+    ctx.fillStyle=sx.s.color;ctx.globalAlpha=.3;
+    ctx.fillRect(c.x,secY+4,c.w,secH-8);ctx.globalAlpha=1;
+    ctx.fillRect(c.x,secY+4,c.w,4);
+    if(c.w>46){ctx.save();ctx.beginPath();ctx.rect(c.x+6,secY,c.w-12,secH);ctx.clip();
+      ctx.fillStyle="#fff";ctx.font="700 12px 'Chakra Petch'";
+      ctx.fillText(sx.s.name,c.x+8,secY+secH*.42);
+      ctx.fillStyle=sx.s.color;ctx.font="700 10px 'Chakra Petch'";
+      ctx.fillText(INTENSITY[sx.s.intensity].label+" · "+fmt(sx.s.lenSec),c.x+8,secY+secH*.75);ctx.restore()}
+  });
+  /* ruler between lanes */
+  ctx.fillStyle="rgba(11,14,19,.9)";ctx.fillRect(0,ruleY,CW,ruleH);
+  ctx.font="10px 'IBM Plex Mono'";
+  const step=30,t0=Math.max(0,Math.floor((P.t-half)/step)*step);
+  for(let t=t0;t<=P.t+half;t+=step){
+    const x=Math.round(X(t))+.5;
+    ctx.strokeStyle="#3A4657";ctx.beginPath();ctx.moveTo(x,ruleY+ruleH-5);ctx.lineTo(x,ruleY+ruleH-1);ctx.stroke();
+    ctx.fillStyle="#8A96A8";ctx.fillText(fmt(t),x+3,ruleY+ruleH/2);
+  }
+  /* transition ticks */
+  W.spans.slice(0,-1).forEach(sp=>{
+    if(sp.end<P.t-half||sp.end>P.t+half)return;
+    const x=Math.round(X(sp.end))+.5;
+    const h=at(W.secs,sp.end),bad=h&&h.s.intensity==="peak";
+    ctx.strokeStyle=bad?"#FF3B5C":"rgba(240,180,55,.8)";ctx.lineWidth=bad?2:1;
+    ctx.setLineDash(bad?[]:[3,3]);
+    ctx.beginPath();ctx.moveTo(x,songY);ctx.lineTo(x,secY+secH);ctx.stroke();
+    ctx.setLineDash([]);ctx.lineWidth=1;
+  });
+  /* centred playhead */
+  const px=Math.round(CW/2)+.5;
+  ctx.strokeStyle="#FFD166";ctx.lineWidth=2.5;
+  ctx.beginPath();ctx.moveTo(px,2);ctx.lineTo(px,CH-2);ctx.stroke();ctx.lineWidth=1;
+  ctx.fillStyle="#FFD166";
+  ctx.beginPath();ctx.moveTo(px-7,0);ctx.lineTo(px+7,0);ctx.lineTo(px,9);ctx.closePath();ctx.fill();
+}
+
+/* ---------- boot ---------- */
+(async()=>{
+  $("#ruShow").textContent=AUTH.redirectUri;
+  try{
+    if(location.search.includes("code=")&&AUTH.clientId){
+      const code=new URLSearchParams(location.search).get("code");
+      history.replaceState({},"",AUTH.redirectUri);
+      await tokenRequest({grant_type:"authorization_code",code,redirect_uri:AUTH.redirectUri,
+        client_id:AUTH.clientId,code_verifier:LSD.get("verifier","")});
+    }
+    if(!AUTH.tok){
+      $("#who").textContent="Not connected on this device.";
+      $("#connectBox").style.display="block";
+      if(CFG_ID){ // app ships its client ID: one-tap login
+        $("#clientRow").style.display="none";
+        $("#connectBox").querySelector(".note").innerHTML='Log into your Spotify account on this device (one time).<br><br><button class="bigbtn primary" id="goLogin" style="width:100%">Log in with Spotify</button>';
+        $("#goLogin").onclick=()=>login();
+      }else{
+        $("#cid").value=AUTH.clientId||"";
+        $("#loginBtn").onclick=()=>{const v=$("#cid").value.trim();
+          if(!/^[0-9a-f]{32}$/i.test(v)){toast("That doesn't look like a Client ID");return}
+          AUTH.clientId=v;login()};
+      }
+      return;
+    }
+    me=await api("/me");
+    $("#who").textContent="Connected as "+(me.display_name||me.id);
+    const ns="u_"+String(me.id).replace(/[^A-Za-z0-9_-]/g,"_").slice(0,48);
+    window.NS_URL="/api/state/"+ns;
+    let st={};
+    try{const r=await fetch("/api/state/"+ns,{cache:"no-store"});if(r.ok)st=await r.json()||{}}catch(e){}
+    workspaces=st.workspaces||{};
+    if(!Object.keys(workspaces).length){ // account not migrated yet: fall back to legacy shared file
+      try{const r=await fetch("/api/state",{cache:"no-store"});if(r.ok){const a=await r.json()||{};workspaces=a.workspaces||{}}}catch(e){}
+    }
+    renderSplash();
+  }catch(e){
+    $("#who").textContent="Connection problem: "+e.message;
+    $("#connectBox").style.display="block";$("#cid").value=AUTH.clientId||"";
+    $("#loginBtn").onclick=()=>{AUTH.clientId=$("#cid").value.trim();login()};
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0B0E13">
+<link rel="manifest" href="manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="Pulseline">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<title>Pulseline · Calendar</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0B0E13;--panel:#151A23;--panel2:#1D2430;--line:#242D3B;--ink:#E9EEF5;--muted:#8A96A8;
+  --faint:#5A667A;--tape:#F0B437;--alert:#FF3B5C;--ok:#4FC98B;
+  --mono:'IBM Plex Mono',ui-monospace,monospace;--disp:'Chakra Petch',system-ui,sans-serif}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{background:var(--bg);color:var(--ink);font:14.5px/1.45 system-ui,-apple-system,sans-serif;
+  min-height:100dvh;padding:max(16px,env(safe-area-inset-top)) 16px 24px}
+#wrap{max-width:640px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+h1{font-family:var(--disp);font-size:20px;letter-spacing:.05em}
+h1 a{color:inherit;text-decoration:none}
+h1 em{font-style:normal;color:var(--tape)}
+h1 span{font-size:12px;color:var(--faint)}
+#who{color:var(--muted);font-size:12.5px;margin-top:-8px}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+#tabs{display:flex;gap:8px}
+#tabs button{flex:1;font-family:var(--disp);font-weight:600;font-size:13px;padding:9px;border:1px solid var(--line);
+  border-radius:9px;color:var(--muted)}
+#tabs button.on{background:var(--tape);color:#141414;border-color:var(--tape)}
+
+/* calendar */
+#cal{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px}
+#calHead{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+#calHead .m{font-family:var(--disp);font-weight:700;font-size:16px}
+#calHead button{width:38px;height:34px;border:1px solid var(--line);border-radius:8px;color:var(--muted);font-size:15px}
+#calHead button:hover{border-color:var(--tape);color:var(--ink)}
+#dow,#grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+#dow div{text-align:center;font-family:var(--mono);font-size:10px;color:var(--faint);padding:4px 0}
+.day{aspect-ratio:1;border-radius:9px;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:4px;font-family:var(--mono);font-size:13px;color:var(--muted);border:1px solid transparent}
+.day.inMonth{color:var(--ink)}
+.day.today{border-color:var(--tape)}
+.day.has{background:var(--panel2);cursor:pointer}
+.day.has:hover{border-color:var(--tape)}
+.day.sel{background:var(--panel2);border-color:var(--tape)}
+.day .dot{width:9px;height:9px;border-radius:50%;visibility:hidden}
+.day.has .dot{visibility:visible}
+.day .n{font-size:9px;color:var(--faint);height:10px}
+
+/* details + history list */
+.entry{display:flex;align-items:center;gap:12px;background:var(--panel);border:1px solid var(--line);
+  border-radius:12px;padding:11px 14px}
+.entry .chip{width:12px;height:34px;border-radius:6px;flex:0 0 auto}
+.entry .meta{flex:1;min-width:0}
+.entry .nm{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.entry .sub{font-family:var(--mono);font-size:12px;color:var(--muted)}
+.entry .sub b{color:var(--ink)}
+.entry .done{font-family:var(--disp);font-size:10px;font-weight:700;letter-spacing:.1em;padding:2px 8px;border-radius:5px}
+.entry .done.full{color:var(--ok);border:1px solid rgba(79,201,139,.4)}
+.entry .done.part{color:var(--med,#E7B94F);border:1px solid rgba(231,185,79,.4);color:#E7B94F}
+.entry .del{color:var(--faint);font-size:14px;padding:6px 9px;border:1px solid var(--line);border-radius:8px}
+.entry .del:hover{color:var(--alert);border-color:var(--alert)}
+#dayDetail h3,#listView h3{font-family:var(--disp);font-size:12px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--muted);margin:4px 0 8px}
+#dayDetail,#listView{display:flex;flex-direction:column;gap:8px}
+.empty{color:var(--faint);font-size:13px;padding:8px 2px}
+#toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:#0B0E13;border:1px solid var(--line);
+  border-radius:10px;padding:10px 16px;font-size:13px;display:none;z-index:99}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px">
+    <h1><a href="./" title="Back to the editor">PULSE<em>LINE</em></a> <span>calendar</span></h1>
+    <a href="workout.html" style="font-family:var(--disp);font-weight:600;font-size:12.5px;color:var(--tape);
+      text-decoration:none;border:1px solid var(--line);border-radius:8px;padding:7px 12px;white-space:nowrap">Workout</a>
+  </div>
+  <div id="who">Loading…</div>
+  <div id="tabs">
+    <button id="tabCal" class="on">Calendar</button>
+    <button id="tabList">History</button>
+  </div>
+
+  <div id="calView">
+    <div id="cal">
+      <div id="calHead">
+        <button id="prevM">‹</button><div class="m" id="mLabel"></div><button id="nextM">›</button>
+      </div>
+      <div id="dow"></div>
+      <div id="grid"></div>
+    </div>
+    <div id="dayDetail" style="margin-top:12px"></div>
+  </div>
+
+  <div id="listView" style="display:none"></div>
+</div>
+<div id="toast"></div>
+
+<script src="config.js"></script>
+<script>
+"use strict";
+const $=s=>document.querySelector(s);
+const fmt=s=>{s=Math.max(0,Math.round(s));const h=Math.floor(s/3600),m=Math.floor(s%3600/60),ss=s%60;
+  return h?`${h}:${String(m).padStart(2,"0")}:${String(ss).padStart(2,"0")}`:`${m}:${String(ss).padStart(2,"0")}`};
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+let toastT;function toast(m){const t=$("#toast");t.textContent=m;t.style.display="block";
+  clearTimeout(toastT);toastT=setTimeout(()=>t.style.display="none",2800)}
+const dayKey=ts=>{const d=new Date(ts);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`};
+
+/* ---- auth: same device tokens as the other pages ---- */
+const LSD={get:(k,d)=>{try{const v=localStorage.getItem("pl_"+k);return v==null?d:JSON.parse(v)}catch(e){return d}},
+           set:(k,v)=>localStorage.setItem("pl_"+k,JSON.stringify(v))};
+async function ensureToken(){
+  let t=LSD.get("tok",null);if(!t)throw new Error("Not connected — log in on the editor or workout page first");
+  if(Date.now()<t.exp)return t.access;
+  const r=await fetch("https://accounts.spotify.com/api/token",{method:"POST",
+    headers:{"Content-Type":"application/x-www-form-urlencoded"},
+    body:new URLSearchParams({grant_type:"refresh_token",refresh_token:t.refresh,
+      client_id:LSD.get("clientId","")||(typeof window.PULSELINE_CLIENT_ID==="string"?window.PULSELINE_CLIENT_ID:"")})});
+  if(!r.ok)throw new Error("Spotify session expired — reconnect on the editor page");
+  const j=await r.json();
+  t={access:j.access_token,refresh:j.refresh_token||t.refresh,scope:j.scope||t.scope,exp:Date.now()+(j.expires_in-60)*1000};
+  LSD.set("tok",t);return t.access;
+}
+
+/* ---- state ---- */
+let NS_URL=null,userState={},history=[];
+let cur=new Date();cur.setDate(1);
+let selDay=null;
+const DEFC="#F0B437";
+
+async function loadState(){
+  const access=await ensureToken();
+  const me=await (await fetch("https://api.spotify.com/v1/me",{headers:{Authorization:"Bearer "+access}})).json();
+  $("#who").textContent=(me.display_name||me.id)+"'s workouts";
+  NS_URL="/api/state/u_"+String(me.id).replace(/[^A-Za-z0-9_-]/g,"_").slice(0,48);
+  const r=await fetch(NS_URL,{cache:"no-store"});
+  userState=r.ok?(await r.json()||{}):{};
+  history=(userState.history||[]).slice().sort((a,b)=>b.ts-a.ts);
+}
+async function saveState(){
+  userState.history=history.slice().sort((a,b)=>a.ts-b.ts);
+  try{await fetch(NS_URL,{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(userState)})}catch(e){toast("Save failed — backend unreachable")}
+}
+async function deleteEntry(id){
+  if(!confirm("Delete this workout from your history?"))return;
+  history=history.filter(h=>h.id!==id);
+  await saveState();
+  renderAll();
+  toast("Workout deleted");
+}
+
+/* ---- calendar ---- */
+const byDay=()=>{const m={};history.forEach(h=>{(m[dayKey(h.ts)]=m[dayKey(h.ts)]||[]).push(h)});
+  Object.values(m).forEach(a=>a.sort((x,y)=>x.ts-y.ts));return m};
+function renderCal(){
+  const days=byDay();
+  $("#mLabel").textContent=cur.toLocaleString(undefined,{month:"long",year:"numeric"});
+  $("#dow").innerHTML=["S","M","T","W","T","F","S"].map(d=>`<div>${d}</div>`).join("");
+  const first=new Date(cur),startDow=first.getDay();
+  const start=new Date(first);start.setDate(1-startDow);
+  const todayK=dayKey(Date.now());
+  let html="";
+  for(let i=0;i<42;i++){
+    const d=new Date(start);d.setDate(start.getDate()+i);
+    const k=dayKey(d);
+    const list=days[k]||[];
+    const inM=d.getMonth()===cur.getMonth();
+    const col=list.length?(list[0].color||DEFC):"transparent";   // marker = FIRST workout's color
+    html+=`<div class="day${inM?" inMonth":""}${k===todayK?" today":""}${list.length?" has":""}${k===selDay?" sel":""}"
+      data-k="${k}" data-n="${list.length}">
+      <span>${d.getDate()}</span>
+      <span class="dot" style="background:${col}"></span>
+      <span class="n">${list.length>1?"×"+list.length:""}</span>
+    </div>`;
+  }
+  $("#grid").innerHTML=html;
+  renderDayDetail(days);
+}
+function entryHtml(h,withDate){
+  const when=new Date(h.ts);
+  const dateStr=withDate
+    ?when.toLocaleDateString(undefined,{weekday:"short",month:"short",day:"numeric",year:"numeric"})+" · "
+    :"";
+  const time=when.toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"});
+  return `<div class="entry">
+    <span class="chip" style="background:${h.color||DEFC}"></span>
+    <div class="meta">
+      <div class="nm">${esc(h.name)}</div>
+      <div class="sub">${dateStr}${time} · intervals <b>${fmt(h.planned)}</b>${
+        h.elapsed&&h.elapsed<h.planned-2?` · did <b>${fmt(h.elapsed)}</b>`:""}</div>
+    </div>
+    <span class="done ${h.completed?"full":"part"}">${h.completed?"DONE":"PARTIAL"}</span>
+    <button class="del" data-del="${esc(h.id)}" title="Delete this workout">✕</button>
+  </div>`;
+}
+function renderDayDetail(days){
+  const el=$("#dayDetail");
+  if(!selDay){el.innerHTML='<div class="empty">Tap a marked day to see its workouts.</div>';return}
+  const list=(days||byDay())[selDay]||[];
+  const d=new Date(selDay+"T12:00:00");
+  el.innerHTML=`<h3>${d.toLocaleDateString(undefined,{weekday:"long",month:"long",day:"numeric"})}</h3>`+
+    (list.length?list.map(h=>entryHtml(h,false)).join("")
+      :'<div class="empty">No workouts this day.</div>');
+}
+$("#grid").addEventListener("click",e=>{
+  const c=e.target.closest(".day.has");if(!c)return;
+  selDay=c.dataset.k;renderCal();
+});
+$("#prevM").onclick=()=>{cur.setMonth(cur.getMonth()-1);renderCal()};
+$("#nextM").onclick=()=>{cur.setMonth(cur.getMonth()+1);renderCal()};
+
+/* ---- history list (newest first) ---- */
+function renderList(){
+  const el=$("#listView");
+  el.innerHTML="<h3>All workouts · newest first</h3>"+
+    (history.length?history.map(h=>entryHtml(h,true)).join("")
+      :'<div class="empty">No workouts logged yet — finish one in workout mode and it lands here.</div>');
+}
+document.addEventListener("click",e=>{
+  const d=e.target.closest("[data-del]");
+  if(d)deleteEntry(d.dataset.del);
+});
+
+/* ---- tabs ---- */
+$("#tabCal").onclick=()=>{$("#tabCal").className="on";$("#tabList").className="";
+  $("#calView").style.display="";$("#listView").style.display="none"};
+$("#tabList").onclick=()=>{$("#tabList").className="on";$("#tabCal").className="";
+  $("#calView").style.display="none";$("#listView").style.display="";renderList()};
+
+function renderAll(){renderCal();renderList()}
+(async()=>{
+  try{await loadState();renderAll()}
+  catch(e){$("#who").textContent=e.message}
+})();
+</script>
+</body>
+</html>

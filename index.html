@@ -1,0 +1,1671 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="theme-color" content="#0B0E13">
+<link rel="manifest" href="manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="Pulseline">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<title>Pulseline — interval workout × playlist sync</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#10141B; --panel:#171C25; --panel2:#1D2430; --line:#242D3B;
+  --ink:#E9EEF5; --muted:#8A96A8; --faint:#5A667A;
+  --tape:#F0B437;
+  --low:#37A8A0; --med:#E7B94F; --high:#EA7A3B; --peak:#E93E5C;
+  --alert:#FF3B5C; --ok:#4FC98B;
+  --mono:'IBM Plex Mono',ui-monospace,monospace;
+  --disp:'Chakra Petch',system-ui,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,'Segoe UI',sans-serif;overflow:hidden}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+input,select{font:inherit;color:var(--ink);background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:5px 8px;outline:none}
+input:focus,select:focus{border-color:var(--tape)}
+input[type=color]{padding:1px;width:34px;height:30px;cursor:pointer}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:#2B3542;border-radius:5px}
+::-webkit-scrollbar-track{background:transparent}
+
+/* ---------- shell ---------- */
+#app{display:grid;grid-template-rows:56px 1fr;height:100vh}
+#topbar{display:flex;align-items:center;gap:16px;padding:0 20px;background:var(--panel);border-bottom:1px solid var(--line)}
+#brand{font-family:var(--disp);font-weight:700;font-size:19px;letter-spacing:.06em}
+#brand em{font-style:normal;color:var(--tape)}
+#brand small{display:block;font-size:9px;font-weight:500;letter-spacing:.28em;color:var(--faint);text-transform:uppercase}
+.tb-spacer{flex:1}
+.btn{font-family:var(--disp);font-weight:600;font-size:13px;letter-spacing:.04em;padding:8px 14px;border-radius:7px;border:1px solid var(--line);background:var(--panel2);transition:border-color .15s}
+.btn:hover{border-color:var(--tape)}
+.btn.primary{background:var(--tape);color:#141414;border-color:var(--tape)}
+.btn.primary:hover{filter:brightness(1.08)}
+.btn:disabled{opacity:.4;cursor:default}
+a.btn,a.btn:visited,a.btn:link{color:var(--ink);text-decoration:none;display:inline-block}
+a.btn:hover{color:var(--ink)}
+.btn.danger:hover{border-color:var(--alert);color:var(--alert)}
+#authState{font-family:var(--mono);font-size:12px;color:var(--muted)}
+#storeMode{font-family:var(--mono);font-size:11px;padding:3px 9px;border-radius:20px;border:1px solid var(--line)}
+#storeMode.disk{color:var(--ok);border-color:rgba(79,201,139,.4)}
+#storeMode.local{color:var(--alert);border-color:rgba(255,59,92,.5)}
+#authState b{color:var(--ok);font-weight:600}
+select#playlistPicker{max-width:340px;font-family:var(--disp)}
+
+#main{display:grid;grid-template-columns:430px minmax(0,1fr);min-height:0;min-width:0}
+.panel-h{font-family:var(--disp);font-weight:600;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);padding:14px 16px 8px}
+.panel-h .count{color:var(--faint);letter-spacing:0;margin-left:6px}
+
+/* ---------- left rail: tracks ---------- */
+#rail{border-right:1px solid var(--line);background:var(--panel);display:grid;grid-template-rows:auto 1fr auto;min-height:0}
+#trackList{overflow-y:auto;min-height:0;padding:0 8px 8px}
+.trk{display:grid;grid-template-columns:26px 1fr 62px 24px;gap:8px;align-items:center;padding:7px 8px;border-radius:8px;border:1px solid transparent}
+.trk:hover{background:var(--panel2)}
+.trk.dragging{opacity:.35}
+.trk.dropTarget{border-color:var(--tape)}
+.trk .idx{font-family:var(--mono);font-size:11px;color:var(--faint);text-align:right;cursor:grab}
+.trk .meta{min-width:0}
+.trk .name{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px}
+.trk .artist{font-size:11.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.trk .dur{font-family:var(--mono);font-size:12px;color:var(--muted);text-align:right}
+.trk .rm{color:var(--faint);font-size:15px;line-height:1;border-radius:5px;padding:3px 5px}
+.trk .rm:hover{color:var(--alert);background:rgba(255,59,92,.1)}
+.plsHead{font-family:var(--disp);font-weight:600;font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--tape);padding:10px 8px 6px}
+.pls{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:8px;cursor:pointer;border:1px solid transparent}
+.pls:hover{background:var(--panel2);border-color:var(--tape)}
+.pls .nm{flex:1;min-width:0;font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pls .n{font-family:var(--mono);font-size:11px;color:var(--muted)}
+.pls .go{font-family:var(--disp);font-weight:700;font-size:11px;color:var(--tape)}
+#railFoot{border-top:1px solid var(--line);padding:12px 16px;display:flex;flex-direction:column;gap:8px}
+#searchRow{display:flex;gap:8px}
+#searchRow input{flex:1}
+#searchResults{max-height:220px;overflow-y:auto;display:flex;flex-direction:column;gap:2px}
+.sr{display:flex;gap:10px;align-items:center;padding:6px 8px;border-radius:7px;font-size:12.5px}
+.sr:hover{background:var(--panel2)}
+.sr .meta{flex:1;min-width:0}
+.sr .name{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sr .artist{color:var(--muted);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sr .dur{font-family:var(--mono);font-size:11px;color:var(--faint)}
+.sr .add{font-family:var(--disp);font-weight:700;color:var(--ok);padding:3px 8px;border:1px solid var(--line);border-radius:6px}
+.sr .add:hover{border-color:var(--ok)}
+
+/* ---------- right column ---------- */
+#stage{display:grid;grid-template-rows:auto auto 1fr;min-height:0;min-width:0;overflow-y:auto;overflow-x:hidden}
+#tlHead{display:flex;align-items:baseline;gap:24px;padding:16px 24px 4px}
+#tlHead .panel-h{padding:0}
+.stat{font-family:var(--mono);font-size:12.5px;color:var(--muted)}
+.stat b{color:var(--ink);font-weight:600}
+.stat.warnGap b{color:var(--med)}
+#zoomWrap{margin-left:auto;display:flex;align-items:center;gap:10px;font-size:11px;color:var(--faint)}
+#zoomWrap input{padding:0;background:none;border:none;width:150px;accent-color:var(--tape)}
+#zoomVal{font-family:var(--mono);font-size:11px;color:var(--muted);min-width:44px;display:inline-block}
+
+#transport{display:flex;align-items:center;gap:14px;margin:2px 24px 8px;padding:7px 14px;background:var(--panel);border:1px solid var(--line);border-radius:9px;height:44px}
+#restartBtn{font-size:13px;width:32px;height:30px;border:1px solid var(--line);border-radius:7px;background:var(--panel2);color:var(--muted)}
+#restartBtn:hover{border-color:var(--tape);color:var(--ink)}
+#playBtn{font-size:15px;width:36px;height:30px;border:1px solid var(--line);border-radius:7px;background:var(--panel2);color:var(--tape)}
+#playBtn:hover{border-color:var(--tape)}
+#playBtn.playing{background:var(--tape);color:#141414;border-color:var(--tape)}
+#speedBtn{font-family:var(--mono);font-size:12px;width:40px;height:30px;border:1px solid var(--line);border-radius:7px;color:var(--muted)}
+#speedBtn:hover{border-color:var(--tape);color:var(--ink)}
+#tNow{font-family:var(--mono);font-size:16px;font-weight:600;color:var(--tape);min-width:96px}
+.tp-sep{width:1px;height:22px;background:var(--line)}
+.tp-cell{font-family:var(--mono);font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:430px}
+.tp-cell b{color:var(--ink);font-weight:600}
+.tp-cell .pill{display:inline-block;font-family:var(--disp);font-size:9px;font-weight:700;letter-spacing:.1em;padding:1px 6px;border-radius:4px;color:#111;vertical-align:1px}
+#nextTrans.hot{color:var(--alert);font-weight:600}
+#deviceBtn{margin-left:auto;font-family:var(--disp);font-size:11.5px;font-weight:600;padding:5px 11px;border:1px solid var(--line);border-radius:7px;color:var(--muted)}
+#deviceBtn:hover{border-color:var(--tape);color:var(--ink)}
+#deviceBtn.linked{color:var(--ok);border-color:rgba(79,201,139,.5)}
+#deviceBtn.suspended{color:var(--med);border-color:rgba(231,185,79,.5)}
+#transport{position:relative}
+#devicePop{display:none;position:absolute;right:8px;top:46px;z-index:60;background:#0B0E13;border:1px solid var(--line);border-radius:9px;padding:6px;min-width:230px;box-shadow:0 10px 30px rgba(0,0,0,.55)}
+#devicePop .dev{display:flex;gap:10px;align-items:center;padding:7px 10px;border-radius:7px;cursor:pointer;font-size:12.5px}
+#devicePop .dev:hover{background:var(--panel2)}
+#devicePop .dev.active b{color:var(--ok)}
+#devicePop .dev small{color:var(--faint)}
+#devicePop .unlink{color:var(--alert);font-size:12px;padding:7px 10px;cursor:pointer;border-top:1px solid var(--line);margin-top:4px}
+#followWrap{font-size:11px;color:var(--faint);display:flex;align-items:center;gap:6px}
+#followWrap input{accent-color:var(--tape);padding:0}
+#tlArea{padding:6px 24px 0;width:100%;max-width:100%}
+#minimap{display:block;width:100%;height:64px;margin-bottom:10px;cursor:grab;border:1px solid var(--line);border-radius:6px;background:#0B0E13}
+#minimap.dragging{cursor:grabbing}
+#tlWrap{position:relative;height:332px;width:100%;overflow:hidden}
+#timeline{display:block;width:100%;height:332px}
+#playhead{position:absolute;top:0;bottom:0;width:1px;background:rgba(240,180,55,.85);pointer-events:none;display:none}
+#tip{position:fixed;z-index:50;pointer-events:none;display:none;background:#0B0E13;border:1px solid var(--line);border-left:3px solid var(--tape);border-radius:8px;padding:10px 13px;min-width:250px;box-shadow:0 10px 30px rgba(0,0,0,.55);font-family:var(--mono);font-size:12px;line-height:1.55}
+#tip .t-total{color:var(--tape);font-weight:600;font-size:13px}
+#tip .sec-lab{font-family:var(--disp);font-size:9.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--faint);margin-top:7px}
+#tip .row b{color:var(--ink)}
+#tip .pill{display:inline-block;font-family:var(--disp);font-size:10px;font-weight:700;letter-spacing:.1em;padding:1px 7px;border-radius:4px;color:#111;vertical-align:1px}
+#tip .warn{color:var(--alert);font-weight:600;margin-top:6px}
+
+/* ---------- clash chip (fixed-size, lives in the timeline header) ---------- */
+#statClash{font-family:var(--mono);font-size:12px;padding:3px 10px;border-radius:20px;border:1px solid transparent}
+#statClash.bad{color:var(--alert);border-color:rgba(255,59,92,.5);cursor:pointer}
+#statClash.bad:hover{background:rgba(255,59,92,.1)}
+#statClash.ok{color:var(--ok);border-color:rgba(79,201,139,.35);cursor:default}
+#statClash.none{display:none}
+
+/* ---------- interval editor ---------- */
+#intervalsWrap{padding:8px 24px 28px}
+#sections{display:flex;flex-direction:column;gap:6px;max-width:900px}
+.sec-card{display:grid;grid-template-columns:24px 17px 36px minmax(120px,1fr) 86px 78px 118px 34px 34px;gap:8px;align-items:center;background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--faint);border-radius:9px;padding:7px 10px}
+.sec-card.dragging{opacity:.35}
+.sec-card.dropTarget{border-color:var(--tape)}
+.sec-card .handle{cursor:grab;color:var(--faint);font-size:15px;text-align:center;user-select:none;line-height:1}
+.sec-card .handle:hover{color:var(--tape)}
+.sec-card input.nm{min-width:0;font-weight:600}
+.sec-card .tstart{font-family:var(--mono);font-size:12px;color:var(--muted);text-align:right;white-space:nowrap}
+.sec-card input.len{font-family:var(--mono);text-align:center;width:100%}
+.sec-card select{width:100%}
+.sec-card .dup,.sec-card .del{color:var(--faint);border:1px solid var(--line);border-radius:6px;padding:4px 0;font-size:12px;text-align:center}
+.sec-card .dup:hover{color:var(--ink);border-color:var(--tape)}
+.sec-card .del:hover{color:var(--alert);border-color:var(--alert)}
+#addSection{max-width:900px;border:1px dashed var(--line);border-radius:9px;display:flex;align-items:center;justify-content:center;gap:10px;color:var(--muted);font-family:var(--disp);font-weight:600;font-size:12px;letter-spacing:.08em;padding:10px}
+#addSection .plus{font-size:20px;line-height:1;color:var(--tape)}
+#addSection:hover{border-color:var(--tape);color:var(--ink)}
+.sec-card.selected{outline:2px solid var(--tape);outline-offset:1px}
+.sec-card .sel{width:15px;height:15px;min-width:15px;accent-color:var(--tape);cursor:pointer;padding:0}
+.sec-card .dup{color:var(--faint);border:1px solid var(--line);border-radius:6px;padding:2px 8px;font-size:12px}
+.sec-card .dup:hover{color:var(--ink);border-color:var(--tape)}
+#dupeBar{display:none;align-items:center;gap:10px;margin-top:10px;padding:8px 14px;background:var(--panel);border:1px solid var(--tape);border-radius:8px;font-size:12.5px;color:var(--muted)}
+#dupeBar b{color:var(--ink)}
+#dupeBar input{width:54px;font-family:var(--mono);text-align:center;padding:3px 6px}
+#wkTools{display:flex;gap:8px;margin-top:12px}
+.btn.sm{padding:5px 10px;font-size:11.5px}
+
+/* ---------- modal / toast / empty ---------- */
+#modalBg{position:fixed;inset:0;background:rgba(5,8,12,.7);display:none;align-items:center;justify-content:center;z-index:100}
+#modal{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:26px 28px;width:480px}
+#modal h2{font-family:var(--disp);font-size:17px;margin-bottom:6px}
+#modal p{color:var(--muted);font-size:13px;margin-bottom:14px;line-height:1.55}
+#modal code{font-family:var(--mono);background:var(--panel2);padding:1px 6px;border-radius:4px;color:var(--tape);font-size:12px}
+#modal input{width:100%;font-family:var(--mono);margin-bottom:14px}
+#modal .row{display:flex;gap:10px;justify-content:flex-end}
+#toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#0B0E13;border:1px solid var(--line);border-radius:8px;padding:10px 18px;font-size:13px;display:none;z-index:120;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+#toast.err{border-color:var(--alert)}
+.empty{color:var(--faint);font-size:13px;padding:14px 16px;line-height:1.5}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="topbar">
+    <div id="brand">PULSE<em>LINE</em><small>interval &times; playlist sync</small></div>
+    <select id="playlistPicker" style="display:none"></select>
+    <input type="color" id="plColor" style="display:none" title="Workout color — used as this playlist's calendar marker">
+    <button class="btn" id="reloadBtn" style="display:none" title="Reload tracks from Spotify">Reload</button>
+    <button class="btn primary" id="saveBtn" style="display:none">Save order to Spotify</button>
+    <button class="btn danger" id="revertBtn" style="display:none" title="Discard local edits and reload the playlist as saved on Spotify">Revert edits</button>
+    <div class="tb-spacer"></div>
+    <span id="storeMode" title=""></span>
+    <span id="authState">Not connected</span>
+    <a class="btn" href="workout.html" id="workoutLink" title="Phone-friendly in-workout player">Workout</a>
+    <a class="btn" href="calendar.html" title="Workout history calendar">Calendar</a>
+    <button class="btn" id="connectBtn">Connect Spotify</button>
+    <button class="btn danger" id="logoutBtn" style="display:none">Disconnect</button>
+  </div>
+
+  <div id="main">
+    <div id="rail">
+      <div class="panel-h">Playlist tracks <span class="count" id="trkCount"></span></div>
+      <div id="trackList"><div class="empty">Connect Spotify and pick a playlist to get started.</div></div>
+      <div id="railFoot">
+        <div id="searchRow">
+          <input id="searchBox" placeholder="Search Spotify to add tracks…" disabled>
+          <button class="btn" id="searchBtn" disabled>Search</button>
+        </div>
+        <div id="searchResults"></div>
+      </div>
+    </div>
+
+    <div id="stage">
+      <div id="tlHead">
+        <div class="panel-h">Timeline</div>
+        <span class="stat">Playlist <b id="statPl">0:00</b></span>
+        <span class="stat">Workout <b id="statWk">0:00</b></span>
+        <span class="stat" id="statGap"></span>
+        <button class="stat" id="statClash" title="Click to jump to each clash"></button>
+        <div id="zoomWrap">FIT <input type="range" id="zoom" min="0" max="100" value="0"> <span id="zoomVal">1.0×</span></div>
+      </div>
+      <div>
+        <div id="transport">
+          <button id="restartBtn" title="Restart from the beginning">⏮</button>
+          <button id="playBtn" title="Play / pause (space)">▶</button>
+          <button id="speedBtn" title="Playback speed">1×</button>
+          <span id="tNow">T+ 0:00</span>
+          <span class="tp-sep"></span>
+          <span class="tp-cell" id="nowSong">—</span>
+          <span class="tp-cell" id="nowInt">—</span>
+          <span class="tp-cell" id="nextTrans"></span>
+          <button id="deviceBtn" title="Play for real on a Spotify device">🔊 link device</button>
+          <label id="followWrap"><input type="checkbox" id="follow" checked> follow</label>
+          <div id="devicePop"></div>
+        </div>
+        <div id="tlArea">
+          <canvas id="minimap" title="Full timeline — drag the window to move it, drag its edges to resize"></canvas>
+          <div id="tlWrap">
+            <canvas id="timeline"></canvas>
+            <div id="playhead"></div>
+          </div>
+        </div>
+
+      </div>
+      <div id="intervalsWrap">
+        <div class="panel-h" style="padding-left:0">Workout intervals <span class="count" id="secCount"></span></div>
+        <div id="sections"></div>
+        <div id="dupeBar"></div>
+        <div id="wkTools">
+          <button class="btn sm primary" id="copyLog">Copy analysis log for AI</button>
+          <button class="btn sm" id="exportLog">Download analysis log</button>
+          <button class="btn sm" id="exportWk">Export workout JSON</button>
+          <button class="btn sm" id="importWk">Import workout JSON</button>
+          <input type="file" id="importFile" accept=".json" style="display:none">
+          <button class="btn sm danger" id="clearWk">Clear workout</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="tip"></div>
+
+<div id="modalBg">
+  <div id="modal">
+    <h2>Connect your Spotify account</h2>
+    <p>One-time setup: create an app at <code>developer.spotify.com/dashboard</code>, add this redirect URI <b>character-for-character</b> (the trailing slash matters):</p>
+    <p style="display:flex;align-items:center;gap:8px"><code id="redirectUriShow" style="font-size:13px"></code>
+      <button class="btn sm" id="copyUri" type="button">Copy</button></p>
+    <p id="localhostWarn" style="display:none;color:var(--alert)">You're on plain <b>http://</b> at a non-loopback address — Spotify only accepts HTTPS URLs or <b>http://127.0.0.1</b>. <a id="hostFix" href="#" style="color:var(--tape)">Reopen this page as 127.0.0.1</a>, or use your HTTPS domain.</p>
+    <p>Then paste the app's <b>Client ID</b> here.</p>
+    <input id="clientIdInput" placeholder="Spotify Client ID" spellcheck="false">
+    <div class="row">
+      <button class="btn" id="modalCancel">Cancel</button>
+      <button class="btn primary" id="modalGo">Log in with Spotify</button>
+    </div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script src="config.js"></script>
+<script>
+"use strict";
+/* ============================== helpers ============================== */
+const $=s=>document.querySelector(s);
+/* Two storage scopes:
+   - LSD (localStorage): per-DEVICE secrets — client ID, Spotify tokens, PKCE verifier.
+     Each device/browser logs into its own Spotify account.
+   - Store (server, /api/state/<ns>): per-USER data — workspaces, session, prefs —
+     namespaced by Spotify user id ("u_<id>") once known, "anon" before login.
+     This is how multi-user works with no app login: whoever's Spotify is
+     connected on a device gets their own state file on the backend. */
+const LSD={get:(k,d)=>{try{const v=localStorage.getItem("pl_"+k);return v==null?d:JSON.parse(v)}catch(e){return d}},
+           set:(k,v)=>localStorage.setItem("pl_"+k,JSON.stringify(v)),
+           del:k=>localStorage.removeItem("pl_"+k)};
+const Store={
+  cache:{}, mode:"server", _t:null, ns:null,
+  url(){return Store.ns?"/api/state/"+Store.ns:"/api/state"},
+  async load(ns){
+    Store.ns=ns||null;
+    try{const r=await fetch(Store.url(),{cache:"no-store"});if(!r.ok)throw 0;
+      Store.cache=await r.json()||{};}
+    catch(e){Store.mode="local";
+      try{Store.cache=JSON.parse(localStorage.getItem("pl_all_"+(ns||"anon"))||"{}")}catch(_){Store.cache={}}
+      toast("Backend storage unreachable — run via `python3 server.py`. Using browser storage for now.",true);}
+  },
+  get:(k,d)=>(k in Store.cache?Store.cache[k]:d),
+  set(k,v){Store.cache[k]=v;Store.queue()},
+  del(k){delete Store.cache[k];Store.queue()},
+  queue(){clearTimeout(Store._t);Store._t=setTimeout(()=>Store.flush(),400)},
+  async flush(){
+    clearTimeout(Store._t);
+    const body=JSON.stringify(Store.cache);
+    if(Store.mode==="server"){
+      try{await fetch(Store.url(),{method:"POST",headers:{"Content-Type":"application/json"},body})}
+      catch(e){/* retried on next change */}
+    }else localStorage.setItem("pl_all_"+(Store.ns||"anon"),body);
+  },
+};
+const LS=Store;
+window.addEventListener("pagehide",()=>{      // last-chance flush on close/refresh
+  if(Store.mode==="server")
+    navigator.sendBeacon(Store.url(),new Blob([JSON.stringify(Store.cache)],{type:"application/json"}));
+  else Store.flush();
+});
+const fmt=s=>{s=Math.max(0,Math.round(s));const h=Math.floor(s/3600),m=Math.floor(s%3600/60),ss=s%60;
+  return h?`${h}:${String(m).padStart(2,"0")}:${String(ss).padStart(2,"0")}`:`${m}:${String(ss).padStart(2,"0")}`};
+const parseLen=v=>{ // "4:30", "270", "1:02:00" -> seconds
+  v=String(v).trim(); if(!v)return 0;
+  const p=v.split(":").map(Number); if(p.some(isNaN))return 0;
+  return p.reduce((a,n)=>a*60+n,0);
+};
+let toastT;
+function toast(msg,err){const t=$("#toast");t.textContent=msg;t.className=err?"err":"";t.style.display="block";
+  clearTimeout(toastT);toastT=setTimeout(()=>t.style.display="none",3500)}
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const uid=()=>Math.random().toString(36).slice(2,9);
+
+/* ============================== state ============================== */
+const INTENSITY={low:{label:"LOW",color:"#37A8A0"},medium:{label:"MED",color:"#E7B94F"},
+                 high:{label:"HIGH",color:"#EA7A3B"},peak:{label:"PEAK",color:"#E93E5C"}};
+const state={
+  tracks:[],            // {id,uri,name,artists,durMs}
+  playlistId:null, playlistName:"", playlists:[],
+  sections:[],                      // {id,name,lenSec,color,intensity} — hydrated from store at boot
+  dirty:false, demo:false, win:null, winFull:true,
+  authed:false, plLoading:false, plError:null, device:null, wsColor:"#F0B437",
+};
+const selSecs=new Set();   // section ids selected for group duplicate (transient)
+/* Per-playlist workspaces, persisted server-side:
+   workspaces[playlistId | "demo"] = {sections, tracks, dirty, name, updated}
+   Each playlist owns its interval list and its in-edit track order. */
+let workspaces={};
+const wsKey=()=>state.demo?"demo":(state.playlistId||null);
+const WS_PALETTE=["#F0B437","#37A8A0","#E8743B","#E93E5C","#7C6FE0","#4FC98B","#E7B94F","#4EA8DE"];
+const wsColorDefault=k=>WS_PALETTE[[...String(k)].reduce((a,c)=>a+c.charCodeAt(0),0)%WS_PALETTE.length];
+function persistWorkspace(){
+  const k=wsKey();if(!k)return;
+  workspaces[k]={sections:state.sections,tracks:state.tracks,dirty:state.dirty,
+    name:state.playlistName,color:state.wsColor||wsColorDefault(k),updated:Date.now()};
+  LS.set("workspaces",workspaces);
+}
+$("#plColor").addEventListener("change",e=>{state.wsColor=e.target.value;persistWorkspace()});
+function showWsColor(){
+  const el=$("#plColor");
+  if(state.playlistId){el.value=state.wsColor;el.style.display=""}
+  else el.style.display="none";
+}
+function updateRevertBtn(){$("#revertBtn").style.display=(state.dirty&&state.playlistId)?"":"none"}
+function markDirty(d){
+  const wasLive=state.device&&state.playlistId&&!state.dirty;
+  state.dirty=d;
+  $("#saveBtn").textContent=d?"Save order to Spotify •":"Save order to Spotify";
+  if(d&&wasLive&&player.playing){
+    remotePause();                       // stop the real audio: timeline no longer matches it
+    setPlaying(false,true);
+    toast("Edit detached live playback — Save to re-arm the linked device",true);
+  }
+  if(state.device)refreshDeviceBtn();    // reflect armed/suspended on the button
+  updateRevertBtn();
+  persistWorkspace();
+  persistSession();
+}
+function persistSession(){LS.set("session",{activeId:wsKey(),
+  playlistName:state.playlistName,win:state.win,winFull:state.winFull,device:state.device||null})}
+
+/* ============================== auth (PKCE) ============================== */
+const CFG_ID=(typeof window.PULSELINE_CLIENT_ID==="string"&&/^[0-9a-f]{32}$/i.test(window.PULSELINE_CLIENT_ID))
+  ?window.PULSELINE_CLIENT_ID:null;
+const AUTH={
+  get clientId(){return CFG_ID||LSD.get("clientId",null)}, set clientId(v){LSD.set("clientId",v)},
+  get tok(){return LSD.get("tok",null)}, set tok(v){v?LSD.set("tok",v):LSD.del("tok")},
+  redirectUri:location.origin+location.pathname.replace(/index\.html$/,""),
+};
+function b64url(buf){return btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"")}
+async function startLogin(){
+  const verifier=b64url(crypto.getRandomValues(new Uint8Array(48)));
+  LSD.set("verifier",verifier);
+  const challenge=b64url(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(verifier)));
+  const p=new URLSearchParams({client_id:AUTH.clientId,response_type:"code",redirect_uri:AUTH.redirectUri,
+    scope:"playlist-read-private playlist-read-collaborative playlist-modify-public playlist-modify-private user-read-playback-state user-modify-playback-state",
+    code_challenge_method:"S256",code_challenge:challenge});
+  await Store.flush();                       // verifier + client ID must survive the redirect
+  location.href="https://accounts.spotify.com/authorize?"+p;
+}
+async function tokenRequest(body){
+  const r=await fetch("https://accounts.spotify.com/api/token",{method:"POST",
+    headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams(body)});
+  if(!r.ok){const err=new Error("Spotify login "+(r.status===400||r.status===401?"session expired":"failed ("+r.status+")"));
+    err.auth=(r.status===400||r.status===401);throw err}
+  const j=await r.json();
+  AUTH.tok={access:j.access_token,refresh:j.refresh_token||(AUTH.tok&&AUTH.tok.refresh),
+    scope:j.scope||(AUTH.tok&&AUTH.tok.scope)||"",exp:Date.now()+ (j.expires_in-60)*1000};
+  await Store.flush();
+}
+async function handleRedirect(){
+  const code=new URLSearchParams(location.search).get("code");
+  if(!code)return false;
+  history.replaceState({},"",AUTH.redirectUri);
+  await tokenRequest({grant_type:"authorization_code",code,redirect_uri:AUTH.redirectUri,
+    client_id:AUTH.clientId,code_verifier:LSD.get("verifier","")});
+  return true;
+}
+async function ensureToken(){
+  const t=AUTH.tok; if(!t)throw new Error("Not connected");
+  if(Date.now()<t.exp)return t.access;
+  await tokenRequest({grant_type:"refresh_token",refresh_token:t.refresh,client_id:AUTH.clientId});
+  return AUTH.tok.access;
+}
+async function api(path,opts={}){
+  const access=await ensureToken();
+  const r=await fetch("https://api.spotify.com/v1"+path,{method:opts.method||"GET",
+    headers:{Authorization:"Bearer "+access,...(opts.body?{"Content-Type":"application/json"}:{})},
+    body:opts.body?JSON.stringify(opts.body):undefined});
+  if(r.status===429){const w=(+r.headers.get("Retry-After")||2)*1000;
+    await new Promise(res=>setTimeout(res,w));return api(path,opts)}
+  if(!r.ok){const tx=await r.text();const err=new Error(`Spotify ${r.status}: ${tx.slice(0,140)}`);
+    err.auth=(r.status===401);throw err}
+  return r.status===204?null:r.json();
+}
+
+/* ============================== spotify data ============================== */
+async function loadUser(){
+  const me=await api("/me");
+  state.authed=true;
+  $("#authState").innerHTML=`Connected as <b>${esc(me.display_name||me.id)}</b>`;
+  $("#connectBtn").style.display="none";$("#logoutBtn").style.display="";
+  return me;
+}
+async function loadPlaylists(){
+  state.plLoading=true;state.plError=null;
+  if(!state.tracks.length)renderTracks();
+  let items=[],url="/me/playlists?limit=50";
+  try{
+    while(url){const j=await api(url);items=items.concat((j.items||[]).filter(p=>p&&p.id));
+      url=j.next?j.next.replace("https://api.spotify.com/v1",""):null}
+  }catch(e){
+    state.plLoading=false;state.plError=e.message;
+    if(!state.tracks.length)renderTracks();
+    if(e.auth)throw e;      // expired session bubbles up to the boot handler
+    return;
+  }
+  state.plLoading=false;
+  state.playlists=items;
+  if(!state.tracks.length)renderTracks();   // surface the playlist browser in the rail
+  const pick=$("#playlistPicker");
+  const plTotal=p=>{const t=(p.tracks&&p.tracks.total)??(p.items&&p.items.total);return Number.isFinite(t)?t:null};
+  pick.innerHTML='<option value="">— pick a playlist —</option>'+
+    items.map(p=>`<option value="${esc(p.id)}">${esc(p.name||"(untitled)")}${plTotal(p)!=null?` (${plTotal(p)})`:""}</option>`).join("");
+  pick.style.display="";
+}
+/* Feb 2026 Spotify API migration: /playlists/{id}/tracks was renamed to /items
+   (old endpoint now 403s for dev-mode apps) and each entry's .track became .item.
+   We try the new shape first and fall back for older apps. */
+let playlistResource=LS.get("plResource","items");   // remembered once detected
+const trackFields=wrap=>`limit=100&fields=next,items(${wrap}(id,uri,name,duration_ms,artists(name),is_local))`;
+async function loadTracks(pid){
+  const attempt=async res=>{
+    const wrap=res==="items"?"item":"track";
+    let url=`/playlists/${pid}/${res}?${trackFields(wrap)}`,items=[];
+    while(url){const j=await api(url);items=items.concat(j.items||[]);
+      url=j.next?j.next.replace("https://api.spotify.com/v1",""):null}
+    return items;
+  };
+  let items;
+  try{items=await attempt(playlistResource)}
+  catch(e){
+    if(!/403|404/.test(String(e.message)))throw e;
+    const other=playlistResource==="items"?"tracks":"items";
+    items=await attempt(other);                       // fallback worked → remember it
+    playlistResource=other;LS.set("plResource",other);
+  }
+  state.tracks=items.map(i=>i&&(i.item||i.track)).filter(t=>t&&t.id&&!t.is_local).map(t=>({
+    id:t.id,uri:t.uri,name:t.name,artists:(t.artists||[]).map(a=>a.name).join(", "),durMs:t.duration_ms}));
+  state.demo=false;markDirty(false);renderAll();
+}
+async function saveOrder(){
+  if(!state.playlistId){toast("No Spotify playlist selected",true);return}
+  const uris=state.tracks.map(t=>t.uri);
+  const writeAll=async res=>{
+    await api(`/playlists/${state.playlistId}/${res}`,{method:"PUT",body:{uris:uris.slice(0,100)}});
+    for(let i=100;i<uris.length;i+=100)
+      await api(`/playlists/${state.playlistId}/${res}`,{method:"POST",body:{uris:uris.slice(i,i+100)}});
+  };
+  try{
+    $("#saveBtn").disabled=true;
+    try{await writeAll(playlistResource)}
+    catch(e){
+      if(!/403|404/.test(String(e.message)))throw e;
+      const other=playlistResource==="items"?"tracks":"items";
+      await writeAll(other);
+      playlistResource=other;LS.set("plResource",other);
+    }
+    markDirty(false);
+    toast(state.device?"Saved ✓ — live device re-armed":"Playlist saved to Spotify ✓");
+  }catch(e){toast(e.message,true)}finally{$("#saveBtn").disabled=false}
+}
+let searchHits=[];   // results live here; the DOM only carries indices
+async function doSearch(){
+  const q=$("#searchBox").value.trim();if(!q)return;
+  try{
+    const j=await api("/search?type=track&limit=8&q="+encodeURIComponent(q));
+    searchHits=(j.tracks.items||[]).map(t=>({id:t.id,uri:t.uri,name:t.name,
+      artists:(t.artists||[]).map(a=>a.name).join(", "),durMs:t.duration_ms}));
+    $("#searchResults").innerHTML=searchHits.map((t,i)=>`
+      <div class="sr">
+        <div class="meta"><div class="name">${esc(t.name)}</div>
+        <div class="artist">${esc(t.artists)}</div></div>
+        <span class="dur">${fmt(t.durMs/1000)}</span>
+        <button class="add" data-idx="${i}">+ add</button>
+      </div>`).join("")||'<div class="empty">No matches.</div>';
+  }catch(e){toast(e.message,true)}
+}
+$("#searchResults").addEventListener("click",e=>{
+  const b=e.target.closest(".add");if(!b)return;
+  const t=searchHits[+b.dataset.idx];if(!t)return;
+  state.tracks.push({...t});markDirty(true);renderAll();
+  toast(`Added "${t.name}" — hit Save to push to Spotify`);
+});
+
+/* ============================== track list ============================== */
+function renderTracks(){
+  const el=$("#trackList");
+  $("#trkCount").textContent=state.tracks.length?`· ${state.tracks.length}`:"";
+  if(!state.tracks.length){
+    if(state.playlists.length){
+      try{
+        el.innerHTML='<div class="plsHead">Your Spotify playlists — click one to load it</div>'+
+          state.playlists.map(p=>{
+            const tot=p&&((p.tracks&&p.tracks.total)??(p.items&&p.items.total));
+            const n=Number.isFinite(tot)?`${tot} tracks`:"";
+            const nm=(p&&p.name)||"(untitled)";
+            return `
+        <div class="pls" data-pl="${esc(p.id)}">
+          <div class="nm" title="${esc(nm)}">${esc(nm)}</div>
+          <span class="n">${n}</span><span class="go">LOAD ›</span>
+        </div>`}).join("");
+      }catch(err){
+        console.error("playlist render failed:",err,state.playlists);
+        el.innerHTML=`<div class="empty" style="color:var(--alert)">Playlist list failed to render: ${esc(err.message)}<br>See the browser console (F12) for details.</div>`;
+      }
+    }else if(state.plLoading){
+      el.innerHTML='<div class="empty">Loading your playlists…</div>';
+    }else if(state.plError){
+      const dev403=state.plError.includes("403");
+      el.innerHTML=`<div class="empty" style="color:var(--alert)">Couldn't load playlists:<br>${esc(state.plError)}</div>`+
+        (dev403?`<div class="empty">A 403 here usually means the Spotify account you logged in with isn't the one that owns the developer app. Either log into Spotify as the app owner, or add this account under <b>User Management</b> in the app's dashboard settings, then disconnect and reconnect.</div>`:"")+
+        `<div class="empty"><button class="btn sm" data-retry>Retry loading playlists</button></div>`;
+    }else if(state.authed){
+      el.innerHTML='<div class="empty">Connected, but no playlists came back for this account.</div>'+
+        '<div class="empty"><button class="btn sm" data-retry>Retry loading playlists</button></div>';
+    }else el.innerHTML='<div class="empty">Connect Spotify to browse your playlists here.</div>';
+    return}
+  el.innerHTML=state.tracks.map((t,i)=>`
+    <div class="trk" draggable="true" data-i="${i}">
+      <div class="idx" title="Drag to reorder">${i+1}</div>
+      <div class="meta"><div class="name" title="${esc(t.name)}">${esc(t.name)}</div>
+        <div class="artist">${esc(t.artists)}</div></div>
+      <div class="dur">${fmt(t.durMs/1000)}</div>
+      <button class="rm" data-rm="${i}" title="Remove from playlist">✕</button>
+    </div>`).join("");
+}
+$("#trackList").addEventListener("click",e=>{
+  const rm=e.target.closest(".rm");if(!rm)return;
+  state.tracks.splice(+rm.dataset.rm,1);markDirty(true);renderAll();
+});
+let dragIdx=null;
+$("#trackList").addEventListener("dragstart",e=>{
+  const row=e.target.closest(".trk");if(!row)return;
+  dragIdx=+row.dataset.i;row.classList.add("dragging");e.dataTransfer.effectAllowed="move";
+});
+$("#trackList").addEventListener("dragover",e=>{
+  e.preventDefault();
+  const row=e.target.closest(".trk");
+  document.querySelectorAll(".trk.dropTarget").forEach(r=>r.classList.remove("dropTarget"));
+  if(row)row.classList.add("dropTarget");
+});
+$("#trackList").addEventListener("drop",e=>{
+  e.preventDefault();
+  const row=e.target.closest(".trk");
+  if(row&&dragIdx!=null){
+    const to=+row.dataset.i;
+    const [mv]=state.tracks.splice(dragIdx,1);
+    state.tracks.splice(to,0,mv);
+    markDirty(true);renderAll();
+  }
+});
+$("#trackList").addEventListener("dragend",()=>{dragIdx=null;
+  document.querySelectorAll(".trk").forEach(r=>r.classList.remove("dragging","dropTarget"))});
+
+/* ============================== interval editor ============================== */
+function addSection(){
+  state.sections.push({id:uid(),name:"Section "+(state.sections.length+1),
+    lenSec:180,intensity:"medium",color:INTENSITY.medium.color});
+  persistSections();renderAll();
+}
+function persistSections(){persistWorkspace()}
+let dupTimes=1,lastSelIdx=null;
+function renderSections(){
+  const wrap=$("#sections");
+  $("#secCount").textContent=state.sections.length?`· ${state.sections.length}`:"";
+  let t=0;
+  wrap.innerHTML=state.sections.map((s,i)=>{
+    const start=t;t+=s.lenSec;
+    return `
+    <div class="sec-card${selSecs.has(s.id)?" selected":""}" style="border-left-color:${s.color}" data-i="${i}">
+      <div class="handle" title="Drag to reorder">⠿</div>
+      <input type="checkbox" class="sel" ${selSecs.has(s.id)?"checked":""} title="Select for group duplicate (shift-click for a range)">
+      <input type="color" value="${s.color}" data-f="color" title="Section color">
+      <input class="nm" value="${esc(s.name)}" data-f="name" title="Section name">
+      <span class="tstart" title="Starts at">T+ ${fmt(start)}</span>
+      <input class="len" value="${fmt(s.lenSec)}" data-f="len" title="Length (m:ss)">
+      <select data-f="intensity" title="Intensity">
+        ${Object.keys(INTENSITY).map(k=>`<option value="${k}" ${s.intensity===k?"selected":""}>${k}</option>`).join("")}
+      </select>
+      <button class="dup" data-dup title="Duplicate this section">⧉</button>
+      <button class="del" data-del title="Delete section">✕</button>
+    </div>`}).join("")+
+    `<button id="addSection"><span class="plus">+</span>ADD SECTION</button>`;
+  $("#addSection").onclick=addSection;
+  renderDupeBar();
+}
+function renderDupeBar(){
+  const bar=$("#dupeBar"),n=selSecs.size;
+  bar.style.display=n?"flex":"none";
+  if(!n){bar.innerHTML="";return}
+  bar.innerHTML=`<b>${n}</b> section${n>1?"s":""} selected · repeat
+    <input id="dupN" type="number" min="1" max="20" value="${dupTimes}"> ×
+    <button class="btn sm primary" id="dupGo">Duplicate group</button>
+    <button class="btn sm" id="dupClear">Clear selection</button>`;
+  $("#dupN").onchange=e=>{dupTimes=Math.max(1,Math.min(20,+e.target.value||1));e.target.value=dupTimes};
+  $("#dupGo").onclick=()=>duplicateGroup(dupTimes);
+  $("#dupClear").onclick=()=>{selSecs.clear();lastSelIdx=null;renderSections()};
+}
+const cloneSec=s=>({...s,id:uid()});
+function duplicateGroup(times){
+  const picked=state.sections.map((s,i)=>({s,i})).filter(x=>selSecs.has(x.s.id));
+  if(!picked.length)return;
+  const insertAt=picked[picked.length-1].i+1;
+  const copies=[];
+  for(let r=0;r<times;r++)picked.forEach(x=>copies.push(cloneSec(x.s)));
+  state.sections.splice(insertAt,0,...copies);
+  selSecs.clear();lastSelIdx=null;
+  persistSections();renderAll();
+  toast(`Added ${copies.length} section${copies.length>1?"s":""} after "${picked[picked.length-1].s.name}"`);
+}
+$("#sections").addEventListener("change",e=>{
+  const card=e.target.closest(".sec-card");if(!card)return;
+  if(e.target.classList.contains("sel"))return;   // selection handled on click
+  const s=state.sections[+card.dataset.i],f=e.target.dataset.f;
+  if(f==="name")s.name=e.target.value;
+  if(f==="color")s.color=e.target.value;
+  if(f==="len"){const v=parseLen(e.target.value);if(v>0)s.lenSec=v;e.target.value=fmt(s.lenSec)}
+  if(f==="intensity"){s.intensity=e.target.value;s.color=INTENSITY[s.intensity].color}
+  persistSections();renderAll();
+});
+$("#sections").addEventListener("click",e=>{
+  const card=e.target.closest(".sec-card");if(!card)return;
+  const i=+card.dataset.i;
+  if(e.target.classList.contains("sel")){
+    if(e.shiftKey&&lastSelIdx!=null){
+      const [a,b]=[Math.min(lastSelIdx,i),Math.max(lastSelIdx,i)];
+      for(let k=a;k<=b;k++)selSecs.add(state.sections[k].id);
+    }else{
+      const id=state.sections[i].id;
+      selSecs.has(id)?selSecs.delete(id):selSecs.add(id);
+    }
+    lastSelIdx=i;
+    renderSections();
+    return;
+  }
+  if(e.target.dataset.dup!==undefined){
+    state.sections.splice(i+1,0,cloneSec(state.sections[i]));
+    persistSections();renderAll();
+    return;
+  }
+  if(e.target.dataset.del!==undefined){
+    selSecs.delete(state.sections[i].id);
+    state.sections.splice(i,1);persistSections();renderAll();
+  }
+});
+/* drag a row by its ⠿ handle to reorder (draggable is armed only from the handle,
+   so text selection in the inline inputs keeps working) */
+let secDragIdx=null;
+$("#sections").addEventListener("mousedown",e=>{
+  const card=e.target.closest(".sec-card");
+  if(card)card.draggable=!!e.target.closest(".handle");
+});
+$("#sections").addEventListener("dragstart",e=>{
+  const card=e.target.closest(".sec-card");if(!card)return;
+  secDragIdx=+card.dataset.i;card.classList.add("dragging");
+  e.dataTransfer.effectAllowed="move";
+});
+$("#sections").addEventListener("dragover",e=>{
+  if(secDragIdx==null)return;
+  e.preventDefault();
+  document.querySelectorAll(".sec-card.dropTarget").forEach(c=>c.classList.remove("dropTarget"));
+  const card=e.target.closest(".sec-card");
+  if(card)card.classList.add("dropTarget");
+});
+$("#sections").addEventListener("drop",e=>{
+  e.preventDefault();
+  const card=e.target.closest(".sec-card");
+  if(card&&secDragIdx!=null){
+    const to=+card.dataset.i;
+    const [mv]=state.sections.splice(secDragIdx,1);
+    state.sections.splice(to,0,mv);
+    persistSections();renderAll();
+  }
+});
+$("#sections").addEventListener("dragend",()=>{
+  secDragIdx=null;
+  document.querySelectorAll(".sec-card").forEach(c=>{c.classList.remove("dragging","dropTarget");c.draggable=false});
+});
+$("#exportWk").onclick=()=>{
+  const blob=new Blob([JSON.stringify({sections:state.sections},null,2)],{type:"application/json"});
+  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="workout.json";a.click();
+};
+$("#importWk").onclick=()=>$("#importFile").click();
+$("#importFile").onchange=async e=>{
+  const f=e.target.files[0];if(!f)return;
+  try{const j=JSON.parse(await f.text());
+    if(!Array.isArray(j.sections))throw 0;
+    state.sections=j.sections.map(s=>({id:s.id||uid(),name:String(s.name||"Section"),
+      lenSec:+s.lenSec||60,intensity:INTENSITY[s.intensity]?s.intensity:"medium",
+      color:/^#[0-9a-fA-F]{6}$/.test(s.color)?s.color:INTENSITY.medium.color}));
+    persistSections();renderAll();toast("Workout imported");
+  }catch(_){toast("Couldn't read that file — expected {\"sections\":[…]}",true)}
+  e.target.value="";
+};
+$("#clearWk").onclick=()=>{state.sections=[];selSecs.clear();lastSelIdx=null;persistSections();renderAll()};
+
+/* ============================== timeline math ============================== */
+function songSpans(){let t=0;return state.tracks.map(tr=>{const s={start:t,end:t+tr.durMs/1000,tr};t=s.end;return s})}
+function sectionSpans(){let t=0;return state.sections.map(s=>{const x={start:t,end:t+s.lenSec,s};t=x.end;return x})}
+function sectionAt(spans,t){return spans.find(x=>t>=x.start&&t<x.end)}
+function computeAlerts(){
+  const secs=sectionSpans(),out=[];
+  const spans=songSpans();
+  for(let i=0;i<spans.length-1;i++){
+    const t=spans[i].end,hit=sectionAt(secs,t);
+    if(hit&&hit.s.intensity==="peak")
+      out.push({t,from:spans[i].tr,to:spans[i+1].tr,sec:hit});
+  }
+  return out;
+}
+
+/* ============================== canvas ============================== */
+const cv=$("#timeline"),ctx=cv.getContext("2d");
+const LAYOUT={songTop:14,songH:104,rulerTop:130,rulerH:48,secTop:190,secH:104,H:332,padL:8,padR:8};
+let view={pxPerSec:1,totalSec:600,width:1200};
+const player={t:0,playing:false,speed:1,last:0,slew:0};
+
+const MIN_WIN=()=>Math.max(5,view.totalSec/64);   // deepest zoom = 64×
+function computeView(){
+  const plSec=state.tracks.reduce((a,t)=>a+t.durMs/1000,0);
+  const wkSec=state.sections.reduce((a,s)=>a+s.lenSec,0);
+  view.totalSec=Math.max(plSec,wkSec,60);
+  view.cw=$("#tlWrap").clientWidth||1200;           // STATIC width — never grows with zoom
+  /* sanitize the window: numbers only, inside [0,total], at least MIN_WIN long */
+  let w=state.win;
+  if(state.winFull||!w||!Number.isFinite(w.start)||!Number.isFinite(w.end))w={start:0,end:view.totalSec};
+  let len=Math.min(Math.max(w.end-w.start,MIN_WIN()),view.totalSec);
+  let start=Math.max(0,Math.min(w.start,view.totalSec-len));
+  state.win={start,end:start+len};
+  state.winFull=len>=view.totalSec-.25;
+  view.win=state.win;
+  view.pxPerSec=(view.cw-LAYOUT.padL-LAYOUT.padR)/len;
+  $("#statPl").textContent=fmt(plSec);
+  $("#statWk").textContent=fmt(wkSec);
+  const gap=$("#statGap");
+  if(plSec&&wkSec){
+    const d=plSec-wkSec;
+    gap.className="stat"+(d<0?" warnGap":"");
+    gap.innerHTML=d>=0?`Music outlasts workout by <b>${fmt(d)}</b>`:`Workout runs <b>${fmt(-d)}</b> past the music`;
+  }else gap.textContent="";
+}
+const X=t=>LAYOUT.padL+(t-view.win.start)*view.pxPerSec;
+
+function drawTimeline(){
+  computeView();
+  const dpr=window.devicePixelRatio||1;
+  const cw=view.cw;
+  cv.width=Math.round(cw*dpr);cv.height=LAYOUT.H*dpr;
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,cw,LAYOUT.H);
+  view.visStart=Math.max(0,view.win.start-60/view.pxPerSec);   // culling = window ± margin
+  view.visEnd=view.win.end+60/view.pxPerSec;
+  ctx.textBaseline="middle";
+
+  const spans=songSpans(),secs=sectionSpans(),alerts=computeAlerts();
+  const alertTimes=new Set(alerts.map(a=>a.t));
+
+  /* lane backgrounds */
+  ctx.fillStyle="#151A23";
+  ctx.fillRect(0,LAYOUT.songTop,cw,LAYOUT.songH);
+  ctx.fillRect(0,LAYOUT.secTop,cw,LAYOUT.secH);
+
+  /* lane labels */
+  ctx.font="600 10px 'Chakra Petch'";ctx.fillStyle="#5A667A";
+  ctx.fillText("S O N G S",6,LAYOUT.songTop-7);
+  ctx.fillText("I N T E R V A L S",6,LAYOUT.secTop-7);
+
+  /* songs */
+  spans.forEach((sp,i)=>{
+    if(sp.end<view.visStart||sp.start>view.visEnd)return;
+    const x=X(sp.start),w=Math.max(1,(sp.end-sp.start)*view.pxPerSec);
+    ctx.fillStyle=i%2?"#2A3444":"#333F53";
+    roundRect(x+1,LAYOUT.songTop+8,w-2,LAYOUT.songH-16,6);ctx.fill();
+    if(w>56){
+      ctx.save();ctx.beginPath();ctx.rect(x+8,LAYOUT.songTop,w-16,LAYOUT.songH);ctx.clip();
+      ctx.fillStyle="#E9EEF5";ctx.font="600 12px system-ui";
+      ctx.fillText(sp.tr.name,x+10,LAYOUT.songTop+34);
+      ctx.fillStyle="#8A96A8";ctx.font="11px system-ui";
+      ctx.fillText(sp.tr.artists,x+10,LAYOUT.songTop+52);
+      ctx.font="11px 'IBM Plex Mono'";ctx.fillStyle="#6B788C";
+      ctx.fillText(fmt(sp.tr.durMs/1000),x+10,LAYOUT.songTop+74);
+      ctx.restore();
+    }
+  });
+
+  /* intervals */
+  secs.forEach(sx=>{
+    if(sx.end<view.visStart||sx.start>view.visEnd)return;
+    const x=X(sx.start),w=Math.max(1,(sx.end-sx.start)*view.pxPerSec);
+    ctx.fillStyle=sx.s.color;
+    ctx.globalAlpha=.22;roundRect(x+1,LAYOUT.secTop+8,w-2,LAYOUT.secH-16,6);ctx.fill();
+    ctx.globalAlpha=1;
+    ctx.fillRect(x+1,LAYOUT.secTop+8,w-2,5);           // intensity cap bar
+    if(sx.s.intensity==="peak"){                        // peak: hatch the cap
+      ctx.fillRect(x+1,LAYOUT.secTop+LAYOUT.secH-13,w-2,5);
+    }
+    if(w>44){
+      ctx.save();ctx.beginPath();ctx.rect(x+8,LAYOUT.secTop,w-16,LAYOUT.secH);ctx.clip();
+      ctx.fillStyle="#E9EEF5";ctx.font="600 12px 'Chakra Petch'";
+      ctx.fillText(sx.s.name,x+10,LAYOUT.secTop+38);
+      ctx.fillStyle=sx.s.color;ctx.font="700 10px 'Chakra Petch'";
+      ctx.fillText(INTENSITY[sx.s.intensity].label,x+10,LAYOUT.secTop+56);
+      ctx.fillStyle="#8A96A8";ctx.font="11px 'IBM Plex Mono'";
+      ctx.fillText(fmt(sx.s.lenSec),x+10,LAYOUT.secTop+74);
+      ctx.restore();
+    }
+  });
+
+  /* ruler tape */
+  const ry=LAYOUT.rulerTop,rh=LAYOUT.rulerH;
+  ctx.fillStyle="#0B0E13";ctx.fillRect(0,ry,cw,rh);
+  ctx.strokeStyle="#242D3B";ctx.beginPath();
+  ctx.moveTo(0,ry+.5);ctx.lineTo(cw,ry+.5);
+  ctx.moveTo(0,ry+rh-.5);ctx.lineTo(cw,ry+rh-.5);ctx.stroke();
+  const step=niceStep(view.pxPerSec);
+  ctx.font="10px 'IBM Plex Mono'";
+  const t0=Math.max(0,Math.floor(view.visStart/step)*step);
+  const t1=Math.min(view.totalSec+.5,view.visEnd+step);
+  for(let t=t0;t<=t1;t+=step){
+    const x=Math.round(X(t))+.5;
+    ctx.strokeStyle="#3A4657";ctx.beginPath();
+    ctx.moveTo(x,ry+rh-10);ctx.lineTo(x,ry+rh-2);ctx.stroke();
+    ctx.fillStyle="#8A96A8";ctx.fillText(fmt(t),x+3,ry+rh-16);
+  }
+
+  /* transition ticks dropping into the tape */
+  spans.slice(0,-1).forEach(sp=>{
+    if(sp.end<view.visStart||sp.end>view.visEnd)return;
+    const x=Math.round(X(sp.end))+.5;
+    const bad=alertTimes.has(sp.end);
+    ctx.strokeStyle=bad?"#FF3B5C":"#F0B437";
+    ctx.lineWidth=bad?2:1;
+    ctx.setLineDash(bad?[]:[3,3]);
+    ctx.beginPath();
+    ctx.moveTo(x,LAYOUT.songTop+4);
+    ctx.lineTo(x,bad?LAYOUT.secTop+LAYOUT.secH-4:ry+rh);   // bad ones pierce both lanes
+    ctx.stroke();
+    ctx.setLineDash([]);ctx.lineWidth=1;
+    /* marker on tape */
+    ctx.fillStyle=bad?"#FF3B5C":"#F0B437";
+    if(bad){diamond(x,ry+rh/2,7);ctx.fill();
+      ctx.fillStyle="#fff";ctx.font="700 9px 'Chakra Petch'";
+      ctx.fillText("!",x-1.6,ry+rh/2+.5);}
+    else{diamond(x,ry+rh/2,4);ctx.fill()}
+  });
+
+  /* end-of-shorter-side hatch */
+  const plEnd=spans.length?spans[spans.length-1].end:0;
+  const wkEnd=secs.length?secs[secs.length-1].end:0;
+  if(plEnd&&wkEnd&&Math.abs(plEnd-wkEnd)>1){
+    const from=Math.min(plEnd,wkEnd),to=Math.max(plEnd,wkEnd);
+    const y=plEnd<wkEnd?LAYOUT.songTop:LAYOUT.secTop;
+    const h=plEnd<wkEnd?LAYOUT.songH:LAYOUT.secH;
+    hatch(X(from),y+8,(to-from)*view.pxPerSec,h-16);
+  }
+
+  /* drag-reorder overlay */
+  if(tlDrag&&tlDrag.moved){
+    const sp=spans[tlDrag.idx];
+    if(sp){ /* dim the block being moved */
+      ctx.fillStyle="rgba(16,20,27,.55)";
+      roundRect(X(sp.start)+1,LAYOUT.songTop+8,Math.max(1,(sp.end-sp.start)*view.pxPerSec)-2,LAYOUT.songH-16,6);
+      ctx.fill();
+    }
+    /* insertion caret at the target slot */
+    const capT=tlDrag.target>=spans.length?plEnd:spans[tlDrag.target].start;
+    const cx=Math.round(X(capT))+.5;
+    ctx.strokeStyle="#F0B437";ctx.lineWidth=2;
+    ctx.beginPath();ctx.moveTo(cx,LAYOUT.songTop+2);ctx.lineTo(cx,LAYOUT.songTop+LAYOUT.songH-2);ctx.stroke();
+    ctx.lineWidth=1;ctx.fillStyle="#F0B437";
+    ctx.beginPath();ctx.moveTo(cx-6,LAYOUT.songTop-4);ctx.lineTo(cx+6,LAYOUT.songTop-4);ctx.lineTo(cx,LAYOUT.songTop+4);ctx.closePath();ctx.fill();
+    ctx.beginPath();ctx.moveTo(cx-6,LAYOUT.songTop+LAYOUT.songH+4);ctx.lineTo(cx+6,LAYOUT.songTop+LAYOUT.songH+4);ctx.lineTo(cx,LAYOUT.songTop+LAYOUT.songH-4);ctx.closePath();ctx.fill();
+    /* ghost label following the cursor */
+    if(sp){
+      ctx.font="600 12px system-ui";
+      const label=sp.tr.name;
+      const w=ctx.measureText(label).width+20;
+      const gx=Math.min(Math.max(tlDrag.x-w/2,2),cw-w-2);
+      ctx.fillStyle="rgba(11,14,19,.92)";
+      roundRect(gx,LAYOUT.songTop+LAYOUT.songH/2-13,w,26,6);ctx.fill();
+      ctx.strokeStyle="#F0B437";ctx.stroke();
+      ctx.fillStyle="#F0B437";ctx.fillText(label,gx+10,LAYOUT.songTop+LAYOUT.songH/2);
+    }
+  }
+  /* live playhead */
+  if(player.t>0||player.playing){
+    if(player.t>=view.win.start&&player.t<=view.win.end){
+      const x=Math.round(X(player.t))+.5;
+      ctx.strokeStyle="#FFD166";ctx.lineWidth=2;
+      ctx.beginPath();ctx.moveTo(x,4);ctx.lineTo(x,LAYOUT.H-4);ctx.stroke();
+      ctx.lineWidth=1;ctx.fillStyle="#FFD166";
+      ctx.beginPath();ctx.moveTo(x-6,0);ctx.lineTo(x+6,0);ctx.lineTo(x,8);ctx.closePath();ctx.fill();
+    }
+  }
+  drawMinimap(spans,secs,alertTimes);
+}
+
+/* ============================== minimap ============================== */
+const mm=$("#minimap"),mtx=mm.getContext("2d");
+const MM={H:64,pad:2};
+const mmX=t=>MM.pad+(t/view.totalSec)*(view.cw-2*MM.pad);
+const mmT=x=>((x-MM.pad)/(view.cw-2*MM.pad))*view.totalSec;
+function drawMinimap(spans,secs,alertTimes){
+  const dpr=window.devicePixelRatio||1,cw=view.cw;
+  mm.width=Math.round(cw*dpr);mm.height=MM.H*dpr;
+  mtx.setTransform(dpr,0,0,dpr,0,0);
+  mtx.clearRect(0,0,cw,MM.H);
+  /* songs strip */
+  spans.forEach((sp,i)=>{
+    mtx.fillStyle=i%2?"#2A3444":"#3A4759";
+    mtx.fillRect(mmX(sp.start),8,Math.max(1,mmX(sp.end)-mmX(sp.start)-.5),16);
+  });
+  /* intervals strip */
+  secs.forEach(sx=>{
+    mtx.fillStyle=sx.s.color;mtx.globalAlpha=.75;
+    mtx.fillRect(mmX(sx.start),40,Math.max(1,mmX(sx.end)-mmX(sx.start)-.5),16);
+    mtx.globalAlpha=1;
+  });
+  /* transitions + peak clashes */
+  spans.slice(0,-1).forEach(sp=>{
+    const bad=alertTimes.has(sp.end),x=Math.round(mmX(sp.end))+.5;
+    mtx.strokeStyle=bad?"#FF3B5C":"rgba(240,180,55,.55)";
+    mtx.lineWidth=bad?2:1;
+    mtx.beginPath();mtx.moveTo(x,bad?4:8);mtx.lineTo(x,bad?60:24);mtx.stroke();
+    mtx.lineWidth=1;
+  });
+  /* window overlay: dim outside, amber frame + edge handles */
+  const x0=mmX(view.win.start),x1=mmX(view.win.end);
+  mtx.fillStyle="rgba(6,8,12,.62)";
+  mtx.fillRect(0,0,x0,MM.H);mtx.fillRect(x1,0,cw-x1,MM.H);
+  mtx.strokeStyle="#F0B437";mtx.lineWidth=1.5;
+  mtx.strokeRect(x0+.75,1,Math.max(2,x1-x0-1.5),MM.H-2);
+  mtx.fillStyle="#F0B437";
+  mtx.fillRect(x0-1,MM.H/2-9,3,18);mtx.fillRect(x1-2,MM.H/2-9,3,18);
+  mtx.lineWidth=1;
+  if(player.t>0||player.playing){
+    const px=Math.round(mmX(player.t))+.5;
+    mtx.strokeStyle="#FFD166";mtx.beginPath();mtx.moveTo(px,0);mtx.lineTo(px,MM.H);mtx.stroke();
+  }
+}
+function roundRect(x,y,w,h,r){r=Math.min(r,w/2,h/2);ctx.beginPath();
+  ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath()}
+function diamond(x,y,r){ctx.beginPath();ctx.moveTo(x,y-r);ctx.lineTo(x+r,y);ctx.lineTo(x,y+r);ctx.lineTo(x-r,y);ctx.closePath()}
+function hatch(x,y,w,h){ctx.save();ctx.beginPath();ctx.rect(x,y,w,h);ctx.clip();
+  ctx.strokeStyle="rgba(138,150,168,.25)";
+  for(let i=-h;i<w;i+=9){ctx.beginPath();ctx.moveTo(x+i,y+h);ctx.lineTo(x+i+h,y);ctx.stroke()}
+  ctx.restore()}
+function niceStep(pps){
+  const targetPx=110,raw=targetPx/pps;
+  const steps=[5,10,15,30,60,120,300,600,900,1800,3600];
+  return steps.find(s=>s>=raw)||3600;
+}
+
+/* ============================== hover + timeline drag ============================== */
+const tip=$("#tip"),playhead=$("#playhead");
+let tlDrag=null; // {idx, startX, x, moved, target}
+function timeAtEvent(e){
+  const rect=$("#tlWrap").getBoundingClientRect();
+  const x=e.clientX-rect.left;
+  return {x, t:view.win.start+(x-LAYOUT.padL)/view.pxPerSec, y:e.clientY-rect.top};
+}
+function songIdxAt(t,y){
+  if(y<LAYOUT.songTop||y>LAYOUT.songTop+LAYOUT.songH)return -1;
+  return songSpans().findIndex(s=>t>=s.start&&t<s.end);
+}
+$("#tlWrap").addEventListener("mousedown",e=>{
+  if(e.button!==0)return;
+  const {x,t,y}=timeAtEvent(e);
+  const i=songIdxAt(t,y);
+  if(i<0)return;
+  tlDrag={idx:i,startX:x,x,moved:false,target:i};
+  e.preventDefault();
+});
+window.addEventListener("mouseup",()=>{
+  if(!tlDrag)return;
+  const {idx,target,moved}=tlDrag;
+  tlDrag=null;
+  $("#tlWrap").style.cursor="";
+  if(moved){
+    const to=target>idx?target-1:target;
+    if(to!==idx){
+      const [mv]=state.tracks.splice(idx,1);
+      state.tracks.splice(to,0,mv);
+      markDirty(true);renderAll();
+      toast(`Moved "${mv.name}" to slot ${to+1}`);
+      return;
+    }
+  }
+  drawTimeline();
+});
+$("#tlWrap").addEventListener("mousemove",e=>{
+  const {x,t,y}=timeAtEvent(e);
+
+  /* active drag: move the block, skip the tooltip */
+  if(tlDrag){
+    if(!tlDrag.moved&&Math.abs(x-tlDrag.startX)>4)tlDrag.moved=true;
+    if(tlDrag.moved){
+      hideTip();
+      $("#tlWrap").style.cursor="grabbing";
+      const spans=songSpans();
+      tlDrag.x=x;
+      tlDrag.target=Math.max(0,Math.min(spans.length,
+        spans.filter(s=>(s.start+s.end)/2<t).length));
+      /* pan the window when dragging near an edge (only matters when zoomed in) */
+      if(!state.winFull){
+        const len=view.win.end-view.win.start;
+        if(x<60)setWindow(view.win.start-len*.03,len,false);
+        else if(x>view.cw-60)setWindow(view.win.start+len*.03,len,false);
+      }
+      drawTimeline();
+      return;
+    }
+  }
+
+  /* idle: grab cursor over song blocks */
+  $("#tlWrap").style.cursor=songIdxAt(t,y)>=0?"grab":"";
+
+  if(t<0||t>view.totalSec||x<0||x>view.cw){hideTip();return}
+  playhead.style.display="block";playhead.style.left=x+"px";
+  const spans=songSpans(),secs=sectionSpans();
+  const sp=sectionAt(spans,t),sx=sectionAt(secs,t);
+  const alerts=computeAlerts();
+  let html=`<div class="t-total">T+ ${fmt(t)}</div>`;
+  if(sp){
+    const into=t-sp.start,left=sp.end-t;
+    html+=`<div class="sec-lab">Song</div>
+      <div class="row"><b>${esc(sp.tr.name)}</b></div>
+      <div class="row" style="color:#8A96A8">${esc(sp.tr.artists)}</div>
+      <div class="row">${fmt(into)} in · ${fmt(left)} left</div>`;
+    if(left<15&&sx&&sx.s.intensity==="peak")
+      html+=`<div class="warn">⚠ transition in ${fmt(left)} — inside PEAK</div>`;
+  } else html+=`<div class="sec-lab">Song</div><div class="row" style="color:#5A667A">— playlist ended —</div>`;
+  if(sx){
+    const into=t-sx.start,left=sx.end-t;
+    const I=INTENSITY[sx.s.intensity];
+    html+=`<div class="sec-lab">Interval</div>
+      <div class="row"><b>${esc(sx.s.name)}</b> <span class="pill" style="background:${sx.s.color}">${I.label}</span></div>
+      <div class="row">${fmt(into)} in · ${fmt(left)} left of ${fmt(sx.s.lenSec)}</div>`;
+  } else html+=`<div class="sec-lab">Interval</div><div class="row" style="color:#5A667A">— workout ended —</div>`;
+  tip.innerHTML=html;
+  tip.style.display="block";
+  const tw=tip.offsetWidth,th=tip.offsetHeight;
+  let tx=e.clientX+18,ty=e.clientY+16;
+  if(tx+tw>innerWidth-8)tx=e.clientX-tw-18;
+  if(ty+th>innerHeight-8)ty=e.clientY-th-16;
+  tip.style.left=tx+"px";tip.style.top=ty+"px";
+});
+$("#tlWrap").addEventListener("mouseleave",hideTip);
+function hideTip(){tip.style.display="none";playhead.style.display="none"}
+
+/* ============================== clash chip ============================== */
+let clashCycle=0;
+function renderAlerts(){
+  const el=$("#statClash"),alerts=computeAlerts();
+  if(!state.tracks.length||!state.sections.length){el.className="stat none";return}
+  if(!alerts.length){el.className="stat ok";el.textContent="✓ no peak clashes";return}
+  el.className="stat bad";
+  el.textContent=`⚠ ${alerts.length} peak clash${alerts.length>1?"es":""} — jump`;
+}
+$("#statClash").addEventListener("click",()=>{
+  const alerts=computeAlerts();
+  if(!alerts.length)return;
+  const a=alerts[clashCycle%alerts.length];clashCycle++;
+  computeView();
+  const len=Math.max(MIN_WIN(),Math.min(view.totalSec,120));  // ~2-minute window on the clash
+  setWindow(a.t-len/2,len);
+});
+
+/* ============================== analysis log export ============================== */
+function buildAnalysisLog(){
+  const spans=songSpans(),secs=sectionSpans(),alerts=computeAlerts();
+  const plSec=spans.length?spans[spans.length-1].end:0;
+  const wkSec=secs.length?secs[secs.length-1].end:0;
+  const r1=x=>Math.round(x*10)/10;
+
+  const transitions=spans.slice(0,-1).map((sp,i)=>{
+    const t=sp.end,hit=sectionAt(secs,t);
+    return {
+      time_sec:r1(t), time:fmt(t),
+      from_track:sp.tr.name, to_track:spans[i+1].tr.name,
+      lands_in_interval:hit?hit.s.name:null,
+      interval_intensity:hit?hit.s.intensity:null,
+      seconds_into_interval:hit?r1(t-hit.start):null,
+      is_peak_clash:!!(hit&&hit.s.intensity==="peak"),
+    };
+  });
+
+  const intervals=secs.map((sx,i)=>({
+    index:i+1, name:sx.s.name, intensity:sx.s.intensity,
+    length_sec:sx.s.lenSec, start_sec:r1(sx.start), end_sec:r1(sx.end),
+    start:fmt(sx.start), end:fmt(sx.end),
+    songs_overlapping:spans.filter(sp=>sp.start<sx.end&&sp.end>sx.start).map(sp=>({
+      track:sp.tr.name,
+      overlap_sec:r1(Math.min(sp.end,sx.end)-Math.max(sp.start,sx.start)),
+      transition_inside:sp.end>sx.start&&sp.end<sx.end&&sp!==spans[spans.length-1],
+    })),
+  }));
+
+  return {
+    _format:"pulseline-analysis-log/1",
+    _description:"Snapshot of a workout playlist app: an ordered music playlist aligned on one shared time axis against an ordered interval workout (both start at t=0). Song transitions (track boundaries) that fall inside a 'peak'-intensity interval are flagged as clashes and should be avoided. Useful analyses: suggest track reorderings or interval length tweaks that eliminate peak clashes, improve intensity/music alignment, or close coverage gaps. Track durations are fixed (from Spotify); interval lengths and order are editable; track order is editable.",
+    exported_at:new Date().toISOString(),
+    playlist:{
+      name:state.playlistName||null, source:state.demo?"demo":"spotify",
+      spotify_playlist_id:state.playlistId||null,
+      has_unsaved_changes:state.dirty,
+      total_duration_sec:r1(plSec), total_duration:fmt(plSec),
+      tracks:spans.map((sp,i)=>({
+        index:i+1, name:sp.tr.name, artists:sp.tr.artists,
+        duration_sec:r1(sp.tr.durMs/1000),
+        start_sec:r1(sp.start), end_sec:r1(sp.end),
+        start:fmt(sp.start), end:fmt(sp.end),
+      })),
+    },
+    workout:{
+      total_duration_sec:r1(wkSec), total_duration:fmt(wkSec),
+      intervals,
+    },
+    alignment:{
+      coverage:plSec>=wkSec
+        ?`music outlasts workout by ${fmt(plSec-wkSec)}`
+        :`workout runs ${fmt(wkSec-plSec)} past the end of the music`,
+      coverage_delta_sec:r1(plSec-wkSec),
+      transitions,
+      peak_clashes:alerts.map(a=>({
+        time_sec:r1(a.t), time:fmt(a.t),
+        from_track:a.from.name, to_track:a.to.name,
+        interval:a.sec.s.name,
+        seconds_into_interval:r1(a.t-a.sec.start),
+        interval_length_sec:a.sec.s.lenSec,
+      })),
+      peak_clash_count:alerts.length,
+    },
+  };
+}
+$("#exportLog").onclick=()=>{
+  const blob=new Blob([JSON.stringify(buildAnalysisLog(),null,2)],{type:"application/json"});
+  const a=document.createElement("a");
+  const d=new Date(),p=n=>String(n).padStart(2,"0");
+  a.href=URL.createObjectURL(blob);
+  a.download=`pulseline-log-${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}.json`;
+  a.click();
+};
+$("#copyLog").onclick=async()=>{
+  const text=JSON.stringify(buildAnalysisLog(),null,2);
+  try{await navigator.clipboard.writeText(text)}
+  catch(e){ // clipboard API can be blocked; fall back to a hidden textarea
+    const ta=document.createElement("textarea");ta.value=text;
+    document.body.appendChild(ta);ta.select();document.execCommand("copy");ta.remove();
+  }
+  toast(`Analysis log copied (${(text.length/1024).toFixed(1)} KB) — paste it into any AI chat`);
+};
+
+/* ============================== render root ============================== */
+function renderAll(){renderTracks();renderSections();drawTimeline();renderAlerts()}
+window.addEventListener("resize",()=>drawTimeline());
+/* ---- the ONE mutator for the visible window; both canvases stay static-width ---- */
+const ZOOM_MAX=64;
+function setWindow(start,len,persist=true){
+  len=Math.min(Math.max(len,MIN_WIN()),view.totalSec);
+  start=Math.max(0,Math.min(start,view.totalSec-len));
+  state.win={start,end:start+len};
+  state.winFull=len>=view.totalSec-.25;
+  syncZoomUI();
+  drawTimeline();
+  if(persist)persistSession();
+}
+function syncZoomUI(){
+  const len=state.win?state.win.end-state.win.start:view.totalSec;
+  const zx=Math.max(1,view.totalSec/len);
+  if(document.activeElement!==$("#zoom"))
+    $("#zoom").value=Math.round(100*Math.log(zx)/Math.log(ZOOM_MAX));
+  $("#zoomVal").textContent=(zx<10?zx.toFixed(1):Math.round(zx))+"×";
+}
+$("#zoom").addEventListener("input",e=>{
+  computeView();
+  const len=view.totalSec/Math.pow(ZOOM_MAX,(+e.target.value||0)/100);
+  const c=(view.win.start+view.win.end)/2;          // slider zooms about the window centre
+  setWindow(c-len/2,len);
+});
+/* ctrl+wheel = zoom the window about the cursor · plain wheel = pan the window */
+$("#tlArea").addEventListener("wheel",e=>{
+  e.preventDefault();
+  computeView();
+  const len=view.win.end-view.win.start;
+  const overMini=e.target===mm;
+  const t=overMini
+    ? mmT(e.clientX-mm.getBoundingClientRect().left)
+    : view.win.start+(e.clientX-$("#tlWrap").getBoundingClientRect().left-LAYOUT.padL)/view.pxPerSec;
+  if(e.ctrlKey){
+    const step=Math.max(.5,Math.min(2,Math.pow(1.0018,-e.deltaY)));   // >1 zooms in
+    const newLen=len/step;
+    const f=Math.max(0,Math.min(1,(t-view.win.start)/len));           // keep t pinned
+    setWindow(t-f*newLen,newLen);
+  }else{
+    setWindow(view.win.start+(e.deltaY/view.pxPerSec)*.6,len);
+  }
+},{passive:false});
+/* ---- minimap dragging: move the window, resize via edge handles, jump on click ---- */
+let mmDrag=null;
+mm.addEventListener("mousedown",e=>{
+  computeView();
+  const x=e.clientX-mm.getBoundingClientRect().left;
+  const x0=mmX(view.win.start),x1=mmX(view.win.end);
+  const len=view.win.end-view.win.start;
+  if(Math.abs(x-x0)<7)mmDrag={mode:"l"};
+  else if(Math.abs(x-x1)<7)mmDrag={mode:"r"};
+  else if(x>x0&&x<x1)mmDrag={mode:"pan",off:mmT(x)-view.win.start};
+  else{setWindow(mmT(x)-len/2,len);mmDrag={mode:"pan",off:len/2}}
+  mm.classList.add("dragging");
+  e.preventDefault();
+});
+window.addEventListener("mousemove",e=>{
+  if(!mmDrag)return;
+  const x=e.clientX-mm.getBoundingClientRect().left;
+  const t=mmT(x);
+  const w=view.win,len=w.end-w.start;
+  if(mmDrag.mode==="pan")setWindow(t-mmDrag.off,len,false);
+  else if(mmDrag.mode==="l")setWindow(Math.min(t,w.end-MIN_WIN()),w.end-Math.min(t,w.end-MIN_WIN()),false);
+  else if(mmDrag.mode==="r")setWindow(w.start,Math.max(t-w.start,MIN_WIN()),false);
+});
+window.addEventListener("mouseup",()=>{
+  if(!mmDrag)return;
+  mmDrag=null;mm.classList.remove("dragging");persistSession();
+});
+mm.addEventListener("mousemove",e=>{         // cursor affordances when not dragging
+  if(mmDrag)return;
+  const x=e.clientX-mm.getBoundingClientRect().left;
+  const x0=mmX(view.win.start),x1=mmX(view.win.end);
+  mm.style.cursor=(Math.abs(x-x0)<7||Math.abs(x-x1)<7)?"col-resize":(x>x0&&x<x1?"grab":"pointer");
+});
+mm.addEventListener("dblclick",()=>setWindow(0,view.totalSec));   // double-click = back to fit
+
+/* ============================== playback (run-through mode) ============================== */
+function fmtNeg(x){return fmt(Math.max(0,x))}
+function updateTransport(){
+  $("#tNow").textContent="T+ "+fmt(player.t);
+  const spans=songSpans(),secs=sectionSpans(),alerts=computeAlerts();
+  const sp=sectionAt(spans,player.t),sx=sectionAt(secs,player.t);
+  $("#nowSong").innerHTML=sp
+    ?`♪ <b>${esc(sp.tr.name)}</b> · ${fmtNeg(sp.end-player.t)} left`
+    :`♪ <span style="color:var(--faint)">— no song —</span>`;
+  if(sx){const I=INTENSITY[sx.s.intensity];
+    $("#nowInt").innerHTML=`<span class="pill" style="background:${sx.s.color}">${I.label}</span> <b>${esc(sx.s.name)}</b> · ${fmtNeg(sx.end-player.t)} left`;
+  }else $("#nowInt").innerHTML=`<span style="color:var(--faint)">— no interval —</span>`;
+  const nt=$("#nextTrans");
+  if(sp&&sp.end<view.totalSec){
+    const inSec=sp.end-player.t;
+    const clash=alerts.some(a=>Math.abs(a.t-sp.end)<.01);
+    nt.className="tp-cell"+(clash&&inSec<15?" hot":"");
+    nt.textContent=`next transition in ${fmtNeg(inSec)}${clash?" ⚠ lands in PEAK":""}`;
+  }else nt.textContent="";
+}
+function playTick(ts){
+  if(!player.playing)return;
+  const dt=Math.min(.25,(ts-player.last)/1000);player.last=ts;
+  player.t=Math.min(player.t+dt*player.speed,view.totalSec);
+  if(player.slew){const step=Math.sign(player.slew)*Math.min(Math.abs(player.slew),dt*.12);
+    player.t+=step;player.slew-=step}
+  if($("#follow").checked&&!state.winFull){
+    const w=view.win,len=w.end-w.start;
+    if(player.t<w.start||player.t>w.start+len*.85)setWindow(player.t-len*.15,len,false);
+    else drawTimeline();
+  }else drawTimeline();
+  updateTransport();
+  if(player.t>=view.totalSec)setPlaying(false);
+  else requestAnimationFrame(playTick);
+}
+function setPlaying(on,fromRemote=false){
+  player.playing=on;
+  $("#playBtn").textContent=on?"❚❚":"▶";
+  $("#playBtn").classList.toggle("playing",on);
+  if(on){
+    computeView();
+    if(player.t>=view.totalSec)player.t=0;   // replay from the top
+    player.last=performance.now();
+    requestAnimationFrame(playTick);
+  }else drawTimeline();
+  if(!fromRemote&&linkActive()){on?remotePlay():remotePause()}
+  syncPoll(on);
+}
+$("#playBtn").onclick=()=>setPlaying(!player.playing);
+$("#restartBtn").onclick=()=>{
+  player.t=0;player.last=performance.now();
+  drawTimeline();updateTransport();
+  if(player.playing&&linkActive())remotePlay();   // re-cue the device at track 1, 0:00
+  else if(!player.playing)toast("Rewound to the start — hit ▶ when ready");
+};
+const SPEEDS=[1,2,4,8,16];
+$("#speedBtn").onclick=()=>{
+  if(linkActive()){toast("Speed is locked to 1× while a real device is linked");return}
+  player.speed=SPEEDS[(SPEEDS.indexOf(player.speed)+1)%SPEEDS.length];
+  $("#speedBtn").textContent=player.speed+"×";
+};
+
+/* ============================== Spotify Connect (real playback) ============================== */
+const linkActive=()=>!!(state.device&&state.authed&&!state.demo&&state.playlistId&&!state.dirty&&state.tracks.length);
+const hasPlaybackScope=()=>((AUTH.tok&&AUTH.tok.scope)||"").includes("user-modify-playback-state");
+function posOf(t){ // map timeline seconds -> {idx, ms into that track}
+  const spans=songSpans();
+  const i=spans.findIndex(sp=>t>=sp.start&&t<sp.end);
+  if(i<0)return null;
+  return {idx:i,ms:Math.round((t-spans[i].start)*1000)};
+}
+async function remotePlay(){
+  /* RULE: live sync only runs on the saved playlist, always as a context —
+     what you hear is exactly what's on Spotify. */
+  const p=posOf(player.t)||{idx:0,ms:0};
+  const body={context_uri:`spotify:playlist:${state.playlistId}`,offset:{position:p.idx},position_ms:p.ms};
+  try{await api(`/me/player/play?device_id=${encodeURIComponent(state.device.id)}`,{method:"PUT",body})}
+  catch(e){remoteFail(e)}
+}
+async function remotePause(){
+  try{await api("/me/player/pause",{method:"PUT"})}catch(e){/* already paused is fine */}
+}
+async function remoteSeek(){
+  const p=posOf(player.t);
+  if(!p)return remotePause();
+  try{ // same track: cheap seek; different track: re-issue play at the new spot
+    const st=await api("/me/player");
+    const curUri=st&&st.item&&st.item.uri;
+    if(curUri===state.tracks[p.idx].uri)await api(`/me/player/seek?position_ms=${p.ms}`,{method:"PUT"});
+    else await remotePlay();
+  }catch(e){remoteFail(e)}
+}
+function remoteFail(e){
+  const m=String(e.message);
+  if(m.includes("404"))toast("No active playback on that device — open the Spotify app on it, then try again",true);
+  else if(m.includes("403")&&m.toLowerCase().includes("premium"))toast("Real playback needs Spotify Premium on the logged-in account",true);
+  else toast("Device control failed: "+m,true);
+}
+/* keep the app clock synced to what Spotify is actually playing */
+let pollH=null;
+function syncPoll(on){
+  clearInterval(pollH);pollH=null;
+  if(!on||!linkActive())return;
+  pollH=setInterval(async()=>{
+    try{
+      const t0=performance.now();
+      const st=await api("/me/player");
+      const rtt=(performance.now()-t0)/1000;
+      if(!st||!st.item)return;
+      if(!st.is_playing){if(player.playing)setPlaying(false,true);return}   // paused on the phone
+      const uri=st.item.uri,spans=songSpans();
+      let best=-1,bestD=1e12;               // same song may repeat: pick occurrence nearest our clock
+      spans.forEach((sp,i)=>{if(state.tracks[i].uri===uri){const d=Math.abs(sp.start-player.t);if(d<bestD){bestD=d;best=i}}});
+      if(best<0)return;
+      const serverT=spans[best].start+(st.progress_ms||0)/1000+rtt/2;       // latency-compensated
+      const d=serverT-player.t;
+      if(Math.abs(d)>2.5){player.t=serverT;player.slew=0;player.last=performance.now()}
+      else player.slew=d;                                                   // absorb small drift smoothly
+    }catch(e){/* transient poll errors are ignored */}
+  },5000);
+}
+/* ---- device picker ---- */
+async function openDevicePicker(){
+  if(state.demo){toast("Demo tracks can't be played on Spotify — load a real playlist first",true);return}
+  if(!state.authed){toast("Connect Spotify first",true);return}
+  if(!state.playlistId){toast("Load one of your Spotify playlists first",true);return}
+  if(state.dirty){toast("Live sync only runs on un-edited playlists — hit Save first",true);return}
+  if(!hasPlaybackScope()){
+    if(confirm("Playback control needs one extra permission. Re-login to Spotify to grant it?"))startLogin();
+    return;
+  }
+  try{
+    const j=await api("/me/player/devices");
+    const devs=(j&&j.devices)||[];
+    const pop=$("#devicePop");
+    pop.innerHTML=(devs.length?devs.map(d=>`
+      <div class="dev${state.device&&state.device.id===d.id?" active":""}" data-id="${esc(d.id)}" data-name="${esc(d.name)}">
+        <b>${esc(d.name)}</b><small>${esc(d.type)}${d.is_active?" · active":""}</small>
+      </div>`).join(""):'<div class="dev"><small>No devices found — open Spotify on your phone or PC, then reopen this list.</small></div>')+
+      (state.device?'<div class="unlink" data-unlink>Unlink — back to silent simulation</div>':"");
+    pop.style.display="block";
+  }catch(e){toast(e.message,true)}
+}
+$("#deviceBtn").onclick=()=>{
+  if($("#devicePop").style.display==="block"){$("#devicePop").style.display="none";return}
+  openDevicePicker();
+};
+$("#devicePop").addEventListener("click",e=>{
+  const row=e.target.closest(".dev[data-id]");
+  if(row){
+    state.device={id:row.dataset.id,name:row.dataset.name};
+    player.speed=1;$("#speedBtn").textContent="1×";
+    refreshDeviceBtn();persistSession();
+    $("#devicePop").style.display="none";
+    toast(`Linked to "${state.device.name}" — play/pause/seek now drive real audio`);
+    if(player.playing)remotePlay(),syncPoll(true);
+    return;
+  }
+  if(e.target.closest("[data-unlink]")){
+    state.device=null;refreshDeviceBtn();persistSession();syncPoll(false);
+    $("#devicePop").style.display="none";
+    toast("Unlinked — back to silent simulation");
+  }
+});
+document.addEventListener("click",e=>{     // click-away closes the popover
+  if(!e.target.closest("#devicePop")&&!e.target.closest("#deviceBtn"))$("#devicePop").style.display="none";
+});
+function refreshDeviceBtn(){
+  const b=$("#deviceBtn");
+  b.classList.remove("linked","suspended");
+  if(!state.device){b.textContent="🔊 link device";return}
+  if(state.dirty){b.classList.add("suspended");b.textContent="🔊 "+state.device.name+" — save to sync";b.title="Live sync pauses while the playlist has unsaved edits"}
+  else{b.classList.add("linked");b.textContent="🔊 "+state.device.name;b.title="Play for real on this Spotify device"}
+}
+window.addEventListener("keydown",e=>{
+  if(e.code!=="Space")return;
+  const tag=(document.activeElement||{}).tagName;
+  if(tag==="INPUT"||tag==="SELECT"||tag==="TEXTAREA")return;
+  e.preventDefault();setPlaying(!player.playing);
+});
+/* click or drag on the ruler tape to seek/scrub */
+let scrubbing=false;
+$("#tlWrap").addEventListener("mousedown",e=>{
+  const {t,y}=timeAtEvent(e);
+  if(y>=LAYOUT.rulerTop&&y<=LAYOUT.rulerTop+LAYOUT.rulerH){
+    scrubbing=true;
+    player.t=Math.max(0,Math.min(view.totalSec,t));
+    drawTimeline();updateTransport();
+    e.preventDefault();e.stopPropagation();
+  }
+},true);   // capture: runs before the song-drag mousedown handler
+window.addEventListener("mousemove",e=>{
+  if(!scrubbing)return;
+  const {t}=timeAtEvent(e);
+  player.t=Math.max(0,Math.min(view.totalSec,t));
+  drawTimeline();updateTransport();
+});
+window.addEventListener("mouseup",()=>{
+  if(scrubbing&&linkActive()&&player.playing)remoteSeek();
+  scrubbing=false;
+});
+
+/* ============================== wiring ============================== */
+$("#connectBtn").onclick=()=>{
+  if(CFG_ID){ // client ID ships with the app: straight to Spotify
+    if(location.protocol!=="https:"&&location.hostname!=="127.0.0.1"){
+      toast("Spotify needs HTTPS or http://127.0.0.1 — use your HTTPS domain or the loopback address",true);return}
+    startLogin();return;
+  }
+  $("#redirectUriShow").textContent=AUTH.redirectUri;
+  $("#clientIdInput").value=AUTH.clientId||"";
+  const badHost=location.protocol!=="https:"&&location.hostname!=="127.0.0.1";
+  $("#localhostWarn").style.display=badHost?"":"none";
+  if(badHost)$("#hostFix").href=location.href.replace(location.hostname,"127.0.0.1");
+  $("#modalBg").style.display="flex";$("#clientIdInput").focus();
+};
+$("#copyUri").onclick=async()=>{
+  try{await navigator.clipboard.writeText(AUTH.redirectUri)}catch(e){}
+  $("#copyUri").textContent="Copied";setTimeout(()=>$("#copyUri").textContent="Copy",1500);
+};
+$("#modalCancel").onclick=()=>$("#modalBg").style.display="none";
+$("#modalGo").onclick=()=>{
+  const id=$("#clientIdInput").value.trim();
+  if(!/^[0-9a-f]{32}$/i.test(id)){toast("That doesn't look like a Client ID (32 hex chars)",true);return}
+  if(location.protocol!=="https:"&&location.hostname!=="127.0.0.1"){
+    toast("Spotify needs HTTPS or http://127.0.0.1 — use your HTTPS domain or the loopback address",true);return}
+  AUTH.clientId=id;startLogin();
+};
+$("#logoutBtn").onclick=async()=>{AUTH.tok=null;await Store.flush();location.reload()};
+async function selectPlaylist(id){
+  if(!id||id===state.playlistId)return;
+  persistWorkspace();                       // stash whatever we're leaving, edits and all
+  state.playlistId=id;state.demo=false;
+  const ws=workspaces[id];
+  state.playlistName=state.playlists.find(p=>p.id===id)?.name||(ws&&ws.name)||"";
+  $("#playlistPicker").value=id;
+  state.sections=(ws&&Array.isArray(ws.sections))?ws.sections:[];   // per-playlist interval list
+  state.wsColor=(ws&&ws.color)||wsColorDefault(id);
+  showWsColor();
+  selSecs.clear();
+  $("#saveBtn").style.display="";$("#reloadBtn").style.display="";
+  if(ws&&ws.dirty&&Array.isArray(ws.tracks)&&ws.tracks.length){
+    state.tracks=ws.tracks;                 // dirty workspaces come back exactly as left
+    markDirty(true);renderAll();
+    toast(`Restored "${state.playlistName}" with your unsaved edits — Revert to discard them`);
+  }else{
+    try{
+      await loadTracks(id);                 // clean: Spotify is the source of truth
+      toast(`Loaded "${state.playlistName}" — ${state.tracks.length} tracks${ws?"":" · new interval list"}`);
+    }catch(err){
+      if(ws&&Array.isArray(ws.tracks)&&ws.tracks.length){
+        state.tracks=ws.tracks;markDirty(false);renderAll();
+        toast("Spotify unreachable — loaded your cached copy ("+err.message+")",true);
+      }else toast(err.message,true);
+    }
+  }
+}
+$("#playlistPicker").onchange=e=>selectPlaylist(e.target.value);
+$("#trackList").addEventListener("click",e=>{
+  const row=e.target.closest(".pls");
+  if(row){selectPlaylist(row.dataset.pl);return}
+  if(e.target.closest("[data-retry]"))loadPlaylists().catch(err=>toast(err.message,true));
+});
+$("#reloadBtn").onclick=()=>{
+  if(!state.playlistId)return;
+  if(state.dirty&&!confirm("Reload will discard your unsaved edits for this playlist. Continue?"))return;
+  loadTracks(state.playlistId).catch(e=>toast(e.message,true));
+};
+$("#revertBtn").onclick=()=>{
+  if(!state.playlistId)return;
+  if(!confirm(`Discard your local edits to "${state.playlistName}" and reload it as saved on Spotify? Your interval list is kept.`))return;
+  loadTracks(state.playlistId)
+    .then(()=>toast("Reverted to the Spotify version ✓"))
+    .catch(e=>toast(e.message,true));
+};
+$("#saveBtn").onclick=saveOrder;
+$("#searchBtn").onclick=doSearch;
+$("#searchBox").addEventListener("keydown",e=>e.key==="Enter"&&doSearch());
+window.addEventListener("beforeunload",e=>{if(state.dirty){e.preventDefault();e.returnValue=""}});
+
+/* boot */
+(async()=>{
+  await Store.load("anon");
+  const sm=$("#storeMode");
+  if(Store.mode==="server"){sm.textContent="● saving to disk";sm.className="disk";
+    sm.title="State persists per Spotify account under data/ via server.py"}
+  else{sm.textContent="● browser storage only";sm.className="local";
+    sm.title="Backend not reachable — launch with `python3 server.py` for disk persistence"}
+  /* legacy combined files kept tokens server-side: adopt them into this device once */
+  if(!LSD.get("tok",null)&&Store.cache.tok){
+    LSD.set("tok",Store.cache.tok);
+    if(Store.cache.clientId)LSD.set("clientId",Store.cache.clientId);
+    Store.del("tok");Store.del("clientId");Store.del("verifier");
+  }
+  function hydrate(quiet){
+    workspaces=LS.get("workspaces",{})||{};
+    const sess=LS.get("session",null);
+    /* migrate pre-workspace sessions (tracks/sections lived globally) */
+    if(!Object.keys(workspaces).length&&sess&&Array.isArray(sess.tracks)&&sess.tracks.length){
+      const k=sess.demo?"demo":(sess.playlistId||null);
+      if(k){workspaces[k]={sections:LS.get("sections",[]),tracks:sess.tracks,
+        dirty:!!sess.dirty,name:sess.playlistName||"",updated:Date.now()};
+        LS.set("workspaces",workspaces)}
+    }
+    const activeId=sess&&(sess.activeId!==undefined?sess.activeId:(sess.demo?"demo":sess.playlistId));
+    if(activeId&&workspaces[activeId]){
+      const ws=workspaces[activeId];
+      state.tracks=ws.tracks||[];
+      state.sections=ws.sections||[];
+      state.dirty=!!ws.dirty;
+      if(activeId==="demo"){state.demo=true;state.playlistId=null}
+      else{state.demo=false;state.playlistId=activeId}
+      state.playlistName=(sess&&sess.playlistName)||ws.name||"";
+      state.wsColor=ws.color||wsColorDefault(activeId);
+      showWsColor();
+      $("#saveBtn").textContent=state.dirty?"Save order to Spotify •":"Save order to Spotify";
+      if(state.playlistId){$("#saveBtn").style.display="";$("#reloadBtn").style.display=""}
+      updateRevertBtn();
+      if(!quiet)toast("Session restored"+(state.dirty?" — this playlist has unsaved edits":""));
+    }
+    if(sess){
+      if(sess.device&&sess.device.id)state.device=sess.device,refreshDeviceBtn();
+      if(sess.win&&Number.isFinite(+sess.win.start)&&Number.isFinite(+sess.win.end))
+        {state.win={start:+sess.win.start,end:+sess.win.end};state.winFull=!!sess.winFull}
+      else{state.win=null;state.winFull=true}
+    }
+  }
+  async function switchToUserNs(userId){
+    const ns="u_"+userId.replace(/[^A-Za-z0-9_-]/g,"_").slice(0,48);
+    if(Store.ns===ns)return;
+    const anonWs=Store.cache.workspaces,anonSess=Store.cache.session,anonCache=Store.cache;
+    await Store.flush();
+    await Store.load(ns);
+    /* first login on a fresh user file: carry anon work over so nothing is lost */
+    if(!Store.cache.workspaces&&anonWs&&Object.keys(anonWs).length){
+      Store.cache.workspaces=anonWs;
+      if(anonSess)Store.cache.session=anonSess;
+      Store.queue();
+      delete anonCache.workspaces;delete anonCache.session;
+      try{await fetch("/api/state",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify(anonCache)})}catch(e){}
+    }
+  }
+  hydrate();
+  renderAll();
+  try{
+    if(location.search.includes("code=")&&AUTH.clientId)await handleRedirect();
+    if(AUTH.tok){
+      const me=await loadUser();
+      await switchToUserNs(me.id);       // per-account state, keyed by Spotify identity
+      hydrate(true);renderAll();
+      await loadPlaylists();
+      if(state.playlistId)$("#playlistPicker").value=state.playlistId;
+      $("#searchBox").disabled=false;$("#searchBtn").disabled=false;
+    }
+  }catch(e){
+    console.error("boot:",e);
+    if(e.auth){AUTH.tok=null;await Store.flush();toast("Spotify session expired — hit Connect to log back in",true)}
+    else{
+      toast(e.message+" — your login is kept; refresh to retry",true);   // transient: do NOT wipe tokens
+      if(!state.tracks.length){state.plLoading=false;state.plError=e.message;renderTracks()}
+    }
+  }
+})();
+</script>
+</body>
+</html>
