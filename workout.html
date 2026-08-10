@@ -57,25 +57,85 @@ button.card:active{border-color:var(--tape)}
     color-mix(in srgb,var(--ic) 55%,#0B0E13) 78%,var(--ic) 120%);
   transition:--ic .6s;padding-bottom:env(safe-area-inset-bottom)}
 #strip{height:31dvh;min-height:170px;position:relative;padding-top:max(8px,env(safe-area-inset-top))}
+body.m-min #strip{height:15dvh;min-height:96px;max-height:120px}
+body.m-focus #strip{display:none}
+body.m-focus #hud{padding-top:max(14px,env(safe-area-inset-top))}
+body.m-focus #intName{font-size:clamp(24px,7vw,40px)}
 #tl{display:block;width:100%;height:100%}
-#hud{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:space-evenly;padding:2px 16px 6px;text-align:center;min-height:0}
+#hud{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;
+  padding:6px 16px 4px;text-align:center;min-height:0}
+#topInfo{display:flex;flex-direction:column;gap:2px;align-items:center;flex:0 0 auto}
+/* flex:1 + min-height:0 means this box's size comes from the layout, not from the text inside.
+   (If it ever sizes to its content, fitCount feeds back into itself and creeps.) */
+#countWrap{flex:1 1 0;display:flex;align-items:center;justify-content:center;
+  width:100%;min-height:0;overflow:hidden}
 #songLine{font-size:14.5px;color:var(--ink);max-width:94vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #songLine .art{color:var(--muted)}
 #songTime{font-family:var(--mono);font-size:13px;color:var(--muted);margin-top:2px}
-#intName{font-family:var(--disp);font-weight:700;font-size:clamp(21px,6.5vw,34px);letter-spacing:.04em;text-shadow:0 2px 14px rgba(0,0,0,.45)}
-#count{font-family:'Rajdhani',var(--disp);font-weight:700;font-size:clamp(110px,36vw,280px);line-height:.9;
-  letter-spacing:.01em;font-variant-numeric:tabular-nums;text-shadow:0 4px 30px rgba(0,0,0,.5)}
+#intName{font-family:var(--disp);font-weight:700;font-size:clamp(21px,6.5vw,34px);letter-spacing:.04em;
+  text-shadow:0 2px 14px rgba(0,0,0,.45);margin-top:2px;
+  max-width:96vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* Each glyph sits in a fixed-width cell, so the timer never shifts as digits change.
+   (Rajdhani has no tabular-figure feature, so we enforce the grid ourselves.) */
+#count{font-family:'Rajdhani',var(--disp);font-weight:700;
+  font-size:34vw;line-height:.86;white-space:nowrap;letter-spacing:0;
+  text-shadow:0 4px 30px rgba(0,0,0,.5)}
+#count i{font-style:normal;display:inline-block;text-align:center}
+#count i.d{width:.58em}
+#count i.c{width:.26em}
 #totals{font-family:var(--mono);font-size:12px;color:rgba(255,255,255,.66)}
 #controls{display:flex;gap:12px;padding:8px 16px 14px;align-items:center}
-#exitBtn,#pauseBtn{border-radius:14px;border:1px solid rgba(255,255,255,.28);background:rgba(0,0,0,.3);backdrop-filter:blur(4px)}
-#exitBtn{width:64px;height:58px;font-size:20px}
+#exitBtn,#pauseBtn,#modeBtn{border-radius:14px;border:1px solid rgba(255,255,255,.28);background:rgba(0,0,0,.3);backdrop-filter:blur(4px)}
+#exitBtn,#modeBtn{width:64px;height:58px;font-size:20px}
 #pauseBtn{flex:1;height:58px;font-family:var(--disp);font-weight:700;font-size:19px;letter-spacing:.06em}
 #pauseBtn.paused{background:var(--tape);color:#141414;border-color:var(--tape)}
 #liveTag{position:absolute;top:max(10px,env(safe-area-inset-top));right:12px;font-family:var(--mono);font-size:10.5px;
   padding:2px 9px;border-radius:12px;background:rgba(0,0,0,.4)}
 #liveTag.live{color:var(--ok)}#liveTag.sim{color:var(--muted)}
+/* ---- landscape on a phone: solid interval color, name + timer only ---- */
+@media (orientation:landscape) and (max-height:520px){
+  /* always full-size focus: solid interval color, white type, no mode switching */
+  #work{background:var(--ic);transition:background .5s}
+  #strip,#songLine,#songTime,#totals,#liveTag,#modeBtn{display:none!important}
+  /* the notch lands left or right depending on which way you turned — respect both */
+  #hud{justify-content:center;color:#fff;
+    padding:2vh calc(72px + env(safe-area-inset-right)) 2vh calc(16px + env(safe-area-inset-left))}
+  #topInfo{flex:0 0 auto}
+  #countWrap{flex:1 1 0;min-height:0}      /* same rule in landscape — never content-sized */
+  #intName{font-family:var(--disp);font-weight:700;font-size:clamp(18px,5vh,42px);
+    letter-spacing:.06em;text-shadow:0 2px 12px rgba(0,0,0,.28);opacity:.95;color:#fff;
+    max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #count{font-family:'Rajdhani',var(--disp);font-weight:700;
+    line-height:.88;color:#fff;text-shadow:0 3px 18px rgba(0,0,0,.25)}
+  #controls{position:fixed;right:calc(8px + env(safe-area-inset-right));top:50%;transform:translateY(-50%);
+    flex-direction:column;gap:8px;padding:0;width:auto}
+  #exitBtn{width:44px;height:40px;font-size:15px;border-color:rgba(255,255,255,.5);
+    background:rgba(0,0,0,.16);color:#fff}
+  #pauseBtn{flex:0 0 auto;width:44px;height:74px;font-size:11px;letter-spacing:.06em;
+    border-color:rgba(255,255,255,.5);background:rgba(0,0,0,.16);color:#fff;writing-mode:vertical-rl}
+  #pauseBtn.paused{background:rgba(255,255,255,.92);color:#141414;border-color:transparent}
+  #toast{bottom:14px}
+}
 #toast{position:fixed;bottom:90px;left:50%;transform:translateX(-50%);background:#0B0E13;border:1px solid var(--line);
   border-radius:10px;padding:10px 16px;font-size:13px;display:none;z-index:99;max-width:92vw;text-align:center}
+#confirmOv{position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:80;
+  background:rgba(6,9,14,.82);backdrop-filter:blur(3px);padding:16px}
+#confirmOv.on{display:flex}
+#confirmBox{background:var(--panel);border:1px solid var(--line);border-radius:16px;
+  padding:20px;width:min(420px,92vw);text-align:center;
+  max-height:92dvh;overflow:auto}
+#confirmBox h3{font-family:var(--disp);font-size:19px;margin-bottom:6px}
+#confirmBox p{font-family:var(--mono);font-size:12.5px;color:var(--muted);margin-bottom:16px}
+.cbtn{display:block;width:100%;font-family:var(--disp);font-weight:700;font-size:15px;
+  padding:14px;border-radius:12px;border:1px solid var(--line);background:var(--panel2);margin-top:8px}
+.cbtn.primary{background:var(--tape);border-color:var(--tape);color:#141414}
+.cbtn.danger{background:transparent;border-color:var(--alert);color:var(--alert)}
+@media (orientation:landscape) and (max-height:520px){
+  #confirmBox{display:flex;flex-wrap:wrap;align-items:center;gap:8px;width:min(560px,94vw);padding:14px}
+  #confirmBox h3{flex:1 1 100%;font-size:16px;margin:0}
+  #confirmBox p{flex:1 1 100%;margin:0 0 6px}
+  .cbtn{flex:1;width:auto;margin:0;padding:12px}
+}
 #doneOv{position:fixed;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;gap:14px;
   background:rgba(6,9,14,.88);z-index:50;text-align:center}
 #doneOv h2{font-family:var(--disp);font-size:30px;color:var(--tape)}
@@ -111,17 +171,28 @@ button.card:active{border-color:var(--tape)}
 <div id="work">
   <div id="strip"><canvas id="tl"></canvas><span id="liveTag"></span></div>
   <div id="hud">
-    <div>
+    <div id="topInfo">
       <div id="songLine"></div>
       <div id="songTime"></div>
+      <div id="intName"></div>
     </div>
-    <div id="intName"></div>
-    <div id="count">0:00</div>
+    <div id="countWrap"><div id="count">0:00</div></div>
     <div id="totals"></div>
   </div>
   <div id="controls">
     <button id="exitBtn" title="End workout">✕</button>
     <button id="pauseBtn">PAUSE</button>
+    <button id="modeBtn" title="Display mode: full / minimal / focus">▤</button>
+  </div>
+</div>
+
+<div id="confirmOv">
+  <div id="confirmBox">
+    <h3>End this workout?</h3>
+    <p id="confirmStats"></p>
+    <button class="cbtn primary" id="cfEnd">End workout</button>
+    <button class="cbtn danger" id="cfDiscard">Discard workout</button>
+    <button class="cbtn" id="cfBack">Keep going</button>
   </div>
 </div>
 
@@ -258,7 +329,8 @@ function initSdk(){
     sdk.addListener("player_state_changed",st=>{
       if(!st||!W||target!=="sdk")return;
       if(!P.started)return;                       // still armed at 0:00, waiting for START
-      if(st.paused&&P.playing&&!st.loading)setPaused(true);
+      if(st.paused&&P.playing&&!st.loading){setPaused(true);return}
+      if(!st.paused&&!P.playing){setPaused(false);return}   // resumed from headphones/lock screen
       const uri=st.track_window&&st.track_window.current_track&&st.track_window.current_track.uri;
       if(!uri)return;
       let best=-1,bd=1e12;
@@ -303,6 +375,25 @@ function cueSection(intensity){const n=AC.currentTime;
   else{beep(880,n);beep(660,n+.24,.3)}}
 function cueDone(){const n=AC.currentTime;beep(880,n,.25);beep(660,n+.28,.25);beep(440,n+.58,.6)}
 
+/* ---------- display modes: full → minimal → focus ---------- */
+const MODES=["full","min","focus"],MODE_ICON={full:"▤",min:"▬",focus:"◻"};
+let dispMode=LSD.get("dispMode","full");
+if(!MODES.includes(dispMode))dispMode="full";
+function applyMode(){
+  document.body.classList.remove("m-full","m-min","m-focus");
+  document.body.classList.add("m-"+dispMode);
+  $("#modeBtn").textContent=MODE_ICON[dispMode];
+  LSD.set("dispMode",dispMode);
+  requestAnimationFrame(()=>{
+    if(W&&dispMode!=="focus"){sizeCanvas();draw()}
+    fitCount(true);                       // the timer's box just changed size
+  });
+}
+$("#modeBtn").onclick=()=>{
+  dispMode=MODES[(MODES.indexOf(dispMode)+1)%MODES.length];
+  applyMode();
+};
+
 /* ---------- wake lock ---------- */
 let wake=null;
 async function grabWake(){try{wake=await navigator.wakeLock.request("screen")}catch(e){}}
@@ -329,10 +420,10 @@ async function startWorkout(key){
   P.playing=false;P.started=false;
   $("#pauseBtn").textContent="START";
   $("#pauseBtn").classList.add("paused");
-  sizeCanvas();draw();updateHud();
+  applyMode();
+  sizeCanvas();draw();updateHud();fitCount(true);
 }
 async function logWorkout(completed){
-  if(P.t<60)return;                        // ignore <1-minute false starts
   if(!window.NS_URL||!W){toast("Workout not logged — no profile connection");return}
   /* snapshot EVERYTHING synchronously: W is nulled the moment we return to the splash,
      so nothing after an await may touch it */
@@ -351,26 +442,41 @@ async function logWorkout(completed){
     toast("Workout logged ✓ "+fmt(entry.elapsed));
   }catch(e){toast("Couldn't log workout: "+e.message,5000)}
 }
-function endWorkout(showDone){
-  if(W&&W.live){
+function endWorkout(showDone,doLog){
+  /* showDone === finished naturally: leave the playlist rolling (cooldown music).
+     Only an explicit ✕ exit stops the audio. */
+  if(W&&W.live&&!showDone){
     if(target==="sdk"&&sdk)sdk.pause().catch(()=>{});
     else api("/me/player/pause",{method:"PUT"}).catch(()=>{});
   }
-  P.playing=false;clearInterval(pollH);pollH=null;
-  logWorkout(showDone);
+  P.playing=false;clearInterval(pollH);pollH=null;stopPausePoll();
+  if(doLog===undefined?showDone:doLog)logWorkout(showDone);
   if(wake){wake.release().catch(()=>{});wake=null}
   if(showDone){cueDone();
-    $("#doneStats").textContent=`${fmt(W.total)} · ${W.ws.sections.length} intervals · ${W.ws.name||""}`;
+    $("#doneStats").textContent=`${fmt(W.total)} · ${W.ws.sections.length} intervals · ${W.ws.name||""}`
+      +(W.live?" · music still playing":"");
     $("#doneOv").style.display="flex";
   }else backToSplash();
 }
 function backToSplash(){
+  $("#confirmOv").classList.remove("on");
   $("#doneOv").style.display="none";
   $("#work").style.display="none";$("#splash").style.display="flex";
   W=null;
 }
 $("#doneBtn").onclick=backToSplash;
-$("#exitBtn").onclick=()=>endWorkout(false);
+$("#exitBtn").onclick=()=>{
+  if(!W)return;
+  const sx=at(W.secs,P.t);
+  $("#confirmStats").textContent=
+    `${fmt(P.t)} done of ${fmt(W.total)}`+(sx?` · ${sx.s.name}`:"")+
+    " — End saves it to your history, Discard doesn't";
+  $("#confirmOv").classList.add("on");
+};
+$("#cfBack").onclick=()=>$("#confirmOv").classList.remove("on");
+$("#confirmOv").onclick=e=>{if(e.target===$("#confirmOv"))$("#confirmOv").classList.remove("on")};
+$("#cfEnd").onclick=()=>{$("#confirmOv").classList.remove("on");endWorkout(false,true)};
+$("#cfDiscard").onclick=()=>{$("#confirmOv").classList.remove("on");endWorkout(false,false)};
 $("#pauseBtn").onclick=()=>setPaused(P.playing);
 async function beginPlayback(){          // called from the START tap (a user gesture)
   if(!W.live)return true;
@@ -406,8 +512,8 @@ function setPaused(pause){
     else if(target==="sdk"&&sdk)sdk[pause?"pause":"resume"]().catch(()=>{});
     else api("/me/player/"+(pause?"pause":"play"),{method:"PUT"}).catch(()=>{});
   }
-  if(P.playing){P.last=performance.now();requestAnimationFrame(tick);startPoll()}
-  else clearInterval(pollH),pollH=null;
+  if(P.playing){P.last=performance.now();requestAnimationFrame(tick);startPoll();stopPausePoll()}
+  else{clearInterval(pollH);pollH=null;startPausePoll()}
 }
 
 /* ---------- clock ---------- */
@@ -423,9 +529,26 @@ function tick(ts){
     P.prevSec=secIdx;
   }
   if(P.t>=W.total){P.t=W.total;draw();updateHud();endWorkout(true);return}
-  draw();updateHud();
+  drawSafe();updateHud();
   requestAnimationFrame(tick);
 }
+let pausePollH=null,pausePollStart=0;
+function startPausePoll(){          // watch for an external resume (headphone tap, lock screen)
+  clearTimeout(pausePollH);
+  if(!W||!W.live||!P.started||target==="sdk")return;   // SDK gets this via events, for free
+  pausePollStart=pausePollStart||Date.now();
+  const age=Date.now()-pausePollStart;
+  if(age>10*60*1000)return;                            // walked away — stop burning API calls
+  const gap=age<2*60*1000?5000:20000;                  // attentive for 2 min, then relaxed
+  pausePollH=setTimeout(async()=>{
+    try{
+      const st=await api("/me/player");
+      if(st&&st.is_playing&&!P.playing&&W){setPaused(false);return}
+    }catch(e){}
+    startPausePoll();
+  },gap);
+}
+function stopPausePoll(){clearTimeout(pausePollH);pausePollH=null;pausePollStart=0}
 let pollH=null;
 function startPoll(){
   clearInterval(pollH);
@@ -449,6 +572,34 @@ function startPoll(){
   },5000);
 }
 
+/* ---------- timer: fixed-width cells + fit-to-box sizing ---------- */
+const CELL_D=.58,CELL_C=.26;              // em widths of a digit / colon cell (must match CSS)
+let lastTxt="",lastFit="";
+function setCount(txt){
+  if(txt===lastTxt)return;
+  lastTxt=txt;
+  $("#count").innerHTML=[...txt].map(ch=>ch===":"
+    ?'<i class="c">:</i>'
+    :`<i class="d">${ch}</i>`).join("");
+  fitCount();
+}
+const countRatio=txt=>[...txt].reduce((a,c)=>a+(c===":"?CELL_C:CELL_D),0);
+function fitCount(force){
+  const el=$("#count"),box=$("#countWrap"),txt=lastTxt||"0:00";
+  const availW=(box.clientWidth||window.innerWidth)*.94;
+  const availH=(box.clientHeight||window.innerHeight*.4)*.96;
+  /* Quantise the box dims: tiny sub-pixel wobble must not re-trigger a fit, and the
+     signature keys on cell COUNT (not the digits) so ticking never resizes. */
+  const sig=txt.length+"|"+(availW/8|0)+"|"+(availH/8|0);
+  if(!force&&sig===lastFit)return;
+  lastFit=sig;
+  const byW=availW/countRatio(txt);
+  const byH=availH/.78;                    // cap height ≈ .78em
+  el.style.fontSize=Math.round(Math.max(48,Math.min(byW,byH)))+"px";
+}
+window.addEventListener("load",()=>fitCount(true));
+if(document.fonts&&document.fonts.ready)document.fonts.ready.then(()=>fitCount(true));
+
 /* ---------- HUD ---------- */
 function updateHud(){
   const sp=at(W.spans,P.t),sx=at(W.secs,P.t);
@@ -458,7 +609,7 @@ function updateHud(){
   if(sx){
     document.documentElement.style.setProperty("--ic",sx.s.color);
     $("#intName").textContent=sx.s.name;
-    $("#count").textContent=fmt(sx.end-P.t);
+    setCount(fmt(sx.end-P.t));
   }
   $("#totals").textContent=`T+ ${fmt(P.t)}  ·  ${fmt(W.total-P.t)} to go`;
 }
@@ -472,12 +623,50 @@ function sizeCanvas(){
   cvs.width=Math.round(CW*dpr);cvs.height=Math.round(CH*dpr);
   ctx.setTransform(dpr,0,0,dpr,0,0);
 }
-window.addEventListener("resize",()=>{if(W){sizeCanvas();draw()}});
+function drawSafe(){        // resync if the element box drifted from the backing store
+  if(cvs.clientHeight!==CH||cvs.clientWidth!==CW)sizeCanvas();
+  draw();
+}
+function onViewportChange(){
+  if(!W)return;
+  if(!document.body.classList.contains("m-focus")&&$("#strip").offsetParent!==null){sizeCanvas();draw()}
+  updateHud();fitCount(true);
+}
+/* Wait for the viewport to stop moving, then lay out exactly once.
+   iOS reports several intermediate sizes mid-rotation; fitting on each one is what
+   made the transition look jittery. */
+/* One settle pass per viewport change: watch until the window stops moving, then lay out once.
+   All sources (resize / orientationchange / visualViewport / media query) funnel through
+   the same debounced entry point, so a rotation can only ever trigger a single pass. */
+let settleRaf=null,settleTimer=null;
+function settleLayout(){
+  cancelAnimationFrame(settleRaf);
+  let lastW=-1,lastH=-1,stable=0,frames=0;
+  const step=()=>{
+    const w=innerWidth,h=innerHeight;        // window dims: independent of our own layout
+    if(w===lastW&&h===lastH)stable++;else stable=0;
+    lastW=w;lastH=h;frames++;
+    if(stable>=2||frames>90){onViewportChange();return}
+    settleRaf=requestAnimationFrame(step);
+  };
+  settleRaf=requestAnimationFrame(step);
+}
+function scheduleSettle(){clearTimeout(settleTimer);settleTimer=setTimeout(settleLayout,50)}
+window.addEventListener("resize",scheduleSettle);
+window.addEventListener("orientationchange",scheduleSettle);
+if(window.visualViewport)window.visualViewport.addEventListener("resize",scheduleSettle);
+if(window.matchMedia)matchMedia("(orientation:landscape)").addEventListener?.("change",scheduleSettle);
 function draw(){
   const WIN=120,half=WIN/2;
   const pps=CW/WIN,X=t=>(t-(P.t-half))*pps;
   ctx.clearRect(0,0,CW,CH);
-  const songY=8,songH=CH*.34,ruleY=songY+songH+6,ruleH=16,secY=ruleY+ruleH+6,secH=CH-secY-8;
+  /* Minimal mode compresses the BARS, never the type: fonts stay at full readable size
+     and labels are vertically centred in whatever lane height is available. */
+  const tiny=CH<130;
+  const pad=tiny?4:8,gap=tiny?4:6,ruleH=tiny?14:16;
+  const lanes=CH-pad*2-ruleH-gap*2;
+  const songH=lanes*.5,secH=lanes*.5;
+  const songY=pad,ruleY=songY+songH+gap,secY=ruleY+ruleH+gap;
   ctx.textBaseline="middle";
   /* lanes */
   ctx.fillStyle="rgba(21,26,35,.85)";
@@ -487,29 +676,39 @@ function draw(){
     if(sp.end<P.t-half||sp.start>P.t+half)return;
     const c=clip(X(sp.start)+1,(sp.end-sp.start)*pps-2);if(c.w<=0)return;
     ctx.fillStyle=i%2?"#2A3444":"#39465C";
-    ctx.fillRect(c.x,songY+4,c.w,songH-8);
+    ctx.fillRect(c.x,songY+(tiny?1:4),c.w,songH-(tiny?2:8));
     if(c.w>50){ctx.save();ctx.beginPath();ctx.rect(c.x+6,songY,c.w-12,songH);ctx.clip();
       ctx.fillStyle="#E9EEF5";ctx.font="600 12px system-ui";
-      ctx.fillText(sp.tr.name,c.x+8,songY+songH*.38);
-      ctx.fillStyle="#8A96A8";ctx.font="11px system-ui";
-      ctx.fillText(sp.tr.artists,c.x+8,songY+songH*.72);ctx.restore()}
+      if(tiny){ // one line, vertically centred in the shorter lane
+        ctx.fillText(sp.tr.name,c.x+8,songY+songH/2);
+      }else{
+        ctx.fillText(sp.tr.name,c.x+8,songY+songH*.38);
+        ctx.fillStyle="#8A96A8";ctx.font="11px system-ui";
+        ctx.fillText(sp.tr.artists,c.x+8,songY+songH*.72);
+      }
+      ctx.restore()}
   });
   W.secs.forEach(sx=>{
     if(sx.end<P.t-half||sx.start>P.t+half)return;
     const c=clip(X(sx.start)+1,(sx.end-sx.start)*pps-2);if(c.w<=0)return;
     ctx.fillStyle=sx.s.color;ctx.globalAlpha=.3;
-    ctx.fillRect(c.x,secY+4,c.w,secH-8);ctx.globalAlpha=1;
-    ctx.fillRect(c.x,secY+4,c.w,4);
+    ctx.fillRect(c.x,secY+(tiny?1:4),c.w,secH-(tiny?2:8));ctx.globalAlpha=1;
+    ctx.fillRect(c.x,secY+(tiny?1:4),c.w,tiny?3:4);
     if(c.w>46){ctx.save();ctx.beginPath();ctx.rect(c.x+6,secY,c.w-12,secH);ctx.clip();
       ctx.fillStyle="#fff";ctx.font="700 12px 'Chakra Petch'";
-      ctx.fillText(sx.s.name,c.x+8,secY+secH*.42);
-      ctx.fillStyle=sx.s.color;ctx.font="700 10px 'Chakra Petch'";
-      ctx.fillText(INTENSITY[sx.s.intensity].label+" · "+fmt(sx.s.lenSec),c.x+8,secY+secH*.75);ctx.restore()}
+      if(tiny){
+        ctx.fillText(sx.s.name,c.x+8,secY+secH/2);
+      }else{
+        ctx.fillText(sx.s.name,c.x+8,secY+secH*.42);
+        ctx.fillStyle=sx.s.color;ctx.font="700 10px 'Chakra Petch'";
+        ctx.fillText(INTENSITY[sx.s.intensity].label+" · "+fmt(sx.s.lenSec),c.x+8,secY+secH*.75);
+      }
+      ctx.restore()}
   });
   /* ruler between lanes */
   ctx.fillStyle="rgba(11,14,19,.9)";ctx.fillRect(0,ruleY,CW,ruleH);
   ctx.font="10px 'IBM Plex Mono'";
-  const step=30,t0=Math.max(0,Math.floor((P.t-half)/step)*step);
+  const step=tiny?60:30,t0=Math.max(0,Math.floor((P.t-half)/step)*step);
   for(let t=t0;t<=P.t+half;t+=step){
     const x=Math.round(X(t))+.5;
     ctx.strokeStyle="#3A4657";ctx.beginPath();ctx.moveTo(x,ruleY+ruleH-5);ctx.lineTo(x,ruleY+ruleH-1);ctx.stroke();
