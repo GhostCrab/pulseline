@@ -10,6 +10,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <meta name="apple-mobile-web-app-title" content="Pulseline">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
+<script src="https://sdk.scdn.co/spotify-player.js"></script>
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
 <title>Pulseline · Workout</title>
@@ -46,6 +47,7 @@ button.card:active{border-color:var(--tape)}
 .btnrow{display:flex;gap:10px}
 .bigbtn{flex:1;font-family:var(--disp);font-weight:700;font-size:15px;padding:14px;border-radius:12px;border:1px solid var(--line);background:var(--panel);text-align:center;text-decoration:none;color:var(--ink)}
 .bigbtn.primary{background:var(--tape);color:#141414;border-color:var(--tape)}
+.bigbtn.on{background:var(--tape);color:#141414;border-color:var(--tape)}
 #clientRow{display:flex;gap:8px}
 #clientRow input{flex:1;font-family:var(--mono);font-size:13px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;color:var(--ink);outline:none}
 
@@ -93,6 +95,14 @@ button.card:active{border-color:var(--tape)}
     <p class="note" style="margin-bottom:10px">Log into Spotify on this device (one time). Uses the same app Client ID as the desktop dashboard; make sure <b id="ruShow"></b> is added as a redirect URI.</p>
     <div id="clientRow"><input id="cid" placeholder="Spotify Client ID" spellcheck="false">
       <button class="bigbtn primary" id="loginBtn" style="flex:0 0 auto">Log in</button></div>
+  </div>
+  <div id="targetBox" style="display:none">
+    <div style="font-family:var(--disp);font-size:11px;letter-spacing:.16em;color:var(--muted);margin-bottom:6px">PLAY THROUGH</div>
+    <div style="display:flex;gap:8px">
+      <button class="bigbtn" id="tgtSdk">This app</button>
+      <button class="bigbtn" id="tgtConnect">Spotify app</button>
+    </div>
+    <p class="note" id="tgtNote" style="margin-top:6px"></p>
   </div>
   <div id="wsList"></div>
   <p class="note" id="hint"></p>
@@ -154,7 +164,7 @@ async function login(){
   const challenge=b64url(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(verifier)));
   location.href="https://accounts.spotify.com/authorize?"+new URLSearchParams({
     client_id:AUTH.clientId,response_type:"code",redirect_uri:AUTH.redirectUri,
-    scope:"playlist-read-private playlist-read-collaborative user-read-playback-state user-modify-playback-state",
+    scope:"playlist-read-private playlist-read-collaborative user-read-playback-state user-modify-playback-state streaming user-read-email user-read-private",
     code_challenge_method:"S256",code_challenge:challenge});
 }
 async function ensureToken(){
@@ -175,7 +185,7 @@ async function api(path,opts={}){
 
 /* ---------- workout state ---------- */
 let me=null,workspaces={},W=null;   // W = active run {ws,key,spans,secs,total,plTotal,live}
-const P={t:0,playing:false,last:0,prevSec:-1,slew:0};
+const P={t:0,playing:false,last:0,prevSec:-1,slew:0,started:false};
 const spansOf=trs=>{let t=0;return trs.map(tr=>{const s={start:t,end:t+tr.durMs/1000,tr};t=s.end;return s})};
 const secsOf=ss=>{let t=0;return ss.map(s=>{const x={start:t,end:t+s.lenSec,s};t=x.end;return x})};
 const at=(arr,t)=>arr.find(x=>t>=x.start&&t<x.end);
@@ -213,6 +223,57 @@ function renderSplash(){
 $("#wsList").addEventListener("click",e=>{
   const c=e.target.closest(".card[data-k]");if(c)startWorkout(c.dataset.k);
 });
+
+/* ---------- Spotify Web Playback SDK (browser as the player) ---------- */
+let sdk=null,sdkId=null,sdkReady=null;
+const hasStreamScope=()=>((LSD.get("tok",{})||{}).scope||"").includes("streaming");
+let target=LSD.get("target","sdk");     // "sdk" = play in this app, "connect" = external device
+function setTarget(t){
+  target=t;LSD.set("target",t);
+  $("#tgtSdk").className="bigbtn"+(t==="sdk"?" on":"");
+  $("#tgtConnect").className="bigbtn"+(t==="connect"?" on":"");
+  $("#tgtNote").textContent=t==="sdk"
+    ?"Audio plays from this app — keep the screen on (it stays awake automatically). Nothing else to open."
+    :"Audio plays on whatever device Spotify is active on. Open the Spotify app first.";
+  if(t==="sdk")initSdk();
+}
+$("#tgtSdk").onclick=()=>{
+  if(!hasStreamScope()){
+    if(confirm("Playing in-app needs one extra Spotify permission. Log in again to grant it?"))login();
+    return;
+  }
+  setTarget("sdk");
+};
+$("#tgtConnect").onclick=()=>setTarget("connect");
+function initSdk(){
+  if(sdkReady||!window.Spotify||!hasStreamScope())return sdkReady;
+  sdkReady=new Promise(resolve=>{
+    sdk=new Spotify.Player({name:"Pulseline",getOAuthToken:cb=>ensureToken().then(cb),volume:1});
+    sdk.addListener("ready",({device_id})=>{sdkId=device_id;resolve(device_id)});
+    sdk.addListener("not_ready",()=>{sdkId=null});
+    sdk.addListener("initialization_error",({message})=>{toast("Player init failed: "+message,5000);resolve(null)});
+    sdk.addListener("authentication_error",({message})=>{toast("Player auth failed — try logging in again",5000);resolve(null)});
+    sdk.addListener("account_error",()=>{toast("In-app playback needs Spotify Premium",5000);resolve(null)});
+    /* real-time sync: fires on every play/pause/seek/track change — no polling */
+    sdk.addListener("player_state_changed",st=>{
+      if(!st||!W||target!=="sdk")return;
+      if(!P.started)return;                       // still armed at 0:00, waiting for START
+      if(st.paused&&P.playing&&!st.loading)setPaused(true);
+      const uri=st.track_window&&st.track_window.current_track&&st.track_window.current_track.uri;
+      if(!uri)return;
+      let best=-1,bd=1e12;
+      W.spans.forEach((sp,i)=>{if(W.ws.tracks[i].uri===uri){const d=Math.abs(sp.start-P.t);if(d<bd){bd=d;best=i}}});
+      if(best<0)return;
+      const serverT=W.spans[best].start+(st.position||0)/1000;
+      const d=serverT-P.t;
+      if(Math.abs(d)>2.5){P.t=serverT;P.slew=0;P.last=performance.now()}
+      else P.slew=d;
+    });
+    sdk.connect();
+  });
+  return sdkReady;
+}
+window.onSpotifyWebPlaybackSDKReady=()=>{if(target==="sdk"&&hasStreamScope())initSdk()};
 
 /* ---------- audio cues ---------- */
 let AC=null,master=null;
@@ -254,19 +315,20 @@ async function startWorkout(key){
   W={ws,key,spans,secs,total:secs[secs.length-1].end,
      plTotal:spans.length?spans[spans.length-1].end:0,
      live:key!=="demo"&&!ws.dirty};
-  P.t=0;P.prevSec=-1;
+  P.t=0;P.prevSec=-1;P.started=false;
   ensureAudio();
+  /* iOS requires the audio element to be unlocked inside the tap that started us */
+  if(W.live&&target==="sdk"&&sdk){try{await sdk.activateElement()}catch(e){}}
   $("#splash").style.display="none";$("#work").style.display="flex";
-  $("#liveTag").textContent=W.live?"● LIVE":"SIMULATED";
+  $("#liveTag").textContent=W.live?(target==="sdk"?"● IN-APP":"● LIVE"):"SIMULATED";
   $("#liveTag").className=W.live?"live":"sim";
   grabWake();
-  if(W.live){
-    try{await api("/me/player/play",{method:"PUT",
-      body:{context_uri:"spotify:playlist:"+key,offset:{position:0},position_ms:0}})}
-    catch(e){W.live=false;$("#liveTag").textContent="SIMULATED";$("#liveTag").className="sim";
-      toast("Couldn't start Spotify — open the app, tap play once, then restart here. Running simulated.")}
-  }
-  setPaused(false);
+  /* Nothing plays yet. Silence until START — the music and the clock begin together.
+     We only warm up the SDK device here so START has no wait. */
+  if(W.live&&target==="sdk")initSdk();
+  P.playing=false;P.started=false;
+  $("#pauseBtn").textContent="START";
+  $("#pauseBtn").classList.add("paused");
   sizeCanvas();draw();updateHud();
 }
 async function logWorkout(completed){
@@ -290,7 +352,10 @@ async function logWorkout(completed){
   }catch(e){toast("Couldn't log workout: "+e.message,5000)}
 }
 function endWorkout(showDone){
-  if(W&&W.live)api("/me/player/pause",{method:"PUT"}).catch(()=>{});
+  if(W&&W.live){
+    if(target==="sdk"&&sdk)sdk.pause().catch(()=>{});
+    else api("/me/player/pause",{method:"PUT"}).catch(()=>{});
+  }
   P.playing=false;clearInterval(pollH);pollH=null;
   logWorkout(showDone);
   if(wake){wake.release().catch(()=>{});wake=null}
@@ -307,13 +372,40 @@ function backToSplash(){
 $("#doneBtn").onclick=backToSplash;
 $("#exitBtn").onclick=()=>endWorkout(false);
 $("#pauseBtn").onclick=()=>setPaused(P.playing);
+async function beginPlayback(){          // called from the START tap (a user gesture)
+  if(!W.live)return true;
+  try{
+    let q="";
+    if(target==="sdk"){
+      if(sdk){try{await sdk.activateElement()}catch(e){}}   // iOS unlock, inside the gesture
+      const id=await Promise.race([initSdk()||Promise.resolve(null),
+        new Promise(r=>setTimeout(()=>r(sdkId),6000))]);
+      if(!id)throw new Error("in-app player unavailable");
+      q="?device_id="+encodeURIComponent(id);
+    }
+    await api("/me/player/play"+q,{method:"PUT",
+      body:{context_uri:"spotify:playlist:"+W.key,offset:{position:0},position_ms:0}});
+    return true;
+  }catch(e){
+    W.live=false;$("#liveTag").textContent="SIMULATED";$("#liveTag").className="sim";
+    toast(target==="sdk"
+      ?"In-app playback failed ("+e.message+") — switch to 'Spotify app' on the splash. Running simulated."
+      :"Couldn't start Spotify — open the app, tap play once, then restart here. Running simulated.",5000);
+    return true;   // the workout still runs, just silently
+  }
+}
 function setPaused(pause){
   if(!W)return;
+  const first=!pause&&!P.started;
+  if(!pause)P.started=true;
   P.playing=!pause;
-  $("#pauseBtn").textContent=pause?"RESUME":"PAUSE";
+  $("#pauseBtn").textContent=pause?(P.started?"RESUME":"START"):"PAUSE";
   $("#pauseBtn").classList.toggle("paused",pause);
-  if(W.live)api("/me/player/"+(pause?"pause":"play"),{method:"PUT",
-    body:pause?undefined:undefined}).catch(()=>{});
+  if(W.live){
+    if(first)beginPlayback();                                  // music + clock start together
+    else if(target==="sdk"&&sdk)sdk[pause?"pause":"resume"]().catch(()=>{});
+    else api("/me/player/"+(pause?"pause":"play"),{method:"PUT"}).catch(()=>{});
+  }
   if(P.playing){P.last=performance.now();requestAnimationFrame(tick);startPoll()}
   else clearInterval(pollH),pollH=null;
 }
@@ -337,7 +429,7 @@ function tick(ts){
 let pollH=null;
 function startPoll(){
   clearInterval(pollH);
-  if(!W||!W.live)return;
+  if(!W||!W.live||target==="sdk")return;   // SDK sync is event-driven; no polling needed
   pollH=setInterval(async()=>{
     try{
       const t0=performance.now();
@@ -476,6 +568,8 @@ function draw(){
     if(!Object.keys(workspaces).length){ // account not migrated yet: fall back to legacy shared file
       try{const r=await fetch("/api/state",{cache:"no-store"});if(r.ok){const a=await r.json()||{};workspaces=a.workspaces||{}}}catch(e){}
     }
+    $("#targetBox").style.display="block";
+    setTarget(hasStreamScope()?target:"connect");
     renderSplash();
   }catch(e){
     $("#who").textContent="Connection problem: "+e.message;
