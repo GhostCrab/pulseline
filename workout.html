@@ -21,6 +21,7 @@
   --bg:#0B0E13;--panel:#151A23;--line:#242D3B;--ink:#E9EEF5;--muted:#8A96A8;--faint:#5A667A;
   --tape:#F0B437;--alert:#FF3B5C;--ok:#4FC98B;
   --ic:#37A8A0;                 /* current interval color, animated */
+  --icbg:#37A8A0;               /* same color, luminance-capped for full-screen use */
   --mono:'IBM Plex Mono',ui-monospace,monospace;
   --disp:'Chakra Petch',system-ui,sans-serif;
 }
@@ -64,7 +65,12 @@ body.m-focus #intName{font-size:clamp(24px,7vw,40px)}
 #tl{display:block;width:100%;height:100%}
 #hud{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;
   padding:6px 16px 4px;text-align:center;min-height:0}
-#topInfo{display:flex;flex-direction:column;gap:2px;align-items:center;flex:0 0 auto}
+#topInfo{display:flex;flex-direction:column;gap:18px;align-items:center;flex:0 0 auto}
+#songPair,#intPair{display:flex;flex-direction:column;gap:3px;align-items:center;max-width:96vw}
+#plPill{font-family:var(--mono);font-size:11.5px;letter-spacing:.02em;color:rgba(255,255,255,.9);
+  background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.14);border-radius:20px;
+  padding:4px 12px;max-width:92vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#plPill b{color:#fff;font-weight:600}
 /* flex:1 + min-height:0 means this box's size comes from the layout, not from the text inside.
    (If it ever sizes to its content, fitCount feeds back into itself and creeps.) */
 #countWrap{flex:1 1 0;display:flex;align-items:center;justify-content:center;
@@ -95,12 +101,15 @@ body.m-focus #intName{font-size:clamp(24px,7vw,40px)}
 /* ---- landscape on a phone: solid interval color, name + timer only ---- */
 @media (orientation:landscape) and (max-height:520px){
   /* always full-size focus: solid interval color, white type, no mode switching */
-  #work{background:var(--ic);transition:background .5s}
+  #work{background:var(--icbg,var(--ic));transition:background .5s}
   #strip,#songLine,#songTime,#totals,#liveTag,#modeBtn{display:none!important}
   /* the notch lands left or right depending on which way you turned — respect both */
   #hud{justify-content:center;color:#fff;
     padding:2vh calc(72px + env(safe-area-inset-right)) 2vh calc(16px + env(safe-area-inset-left))}
-  #topInfo{flex:0 0 auto}
+  #topInfo{flex:0 0 auto;gap:0}
+  #intPair{gap:5px}
+  #plPill{font-size:11px;color:rgba(255,255,255,.92);background:rgba(0,0,0,.18);
+    border-color:rgba(255,255,255,.3)}
   #countWrap{flex:1 1 0;min-height:0}      /* same rule in landscape — never content-sized */
   #intName{font-family:var(--disp);font-weight:700;font-size:clamp(18px,5vh,42px);
     letter-spacing:.06em;text-shadow:0 2px 12px rgba(0,0,0,.28);opacity:.95;color:#fff;
@@ -115,6 +124,15 @@ body.m-focus #intName{font-size:clamp(24px,7vw,40px)}
     border-color:rgba(255,255,255,.5);background:rgba(0,0,0,.16);color:#fff;writing-mode:vertical-rl}
   #pauseBtn.paused{background:rgba(255,255,255,.92);color:#141414;border-color:transparent}
   #toast{bottom:14px}
+}
+/* overall-workout progress: only in landscape, hugging the very bottom edge */
+#progBar{display:none}
+@media (orientation:landscape) and (max-height:520px){
+  #progBar{display:block;position:fixed;left:0;right:0;bottom:0;height:3dvh;min-height:9px;max-height:22px;
+    background:rgba(0,0,0,.14);z-index:40;pointer-events:none}
+  #progFill{height:100%;width:0;background:#fff;transition:width .25s linear}
+  #hud{padding-bottom:calc(3dvh + 8px)}
+  #controls{margin-top:-1.5dvh}
 }
 #toast{position:fixed;bottom:90px;left:50%;transform:translateX(-50%);background:#0B0E13;border:1px solid var(--line);
   border-radius:10px;padding:10px 16px;font-size:13px;display:none;z-index:99;max-width:92vw;text-align:center}
@@ -139,6 +157,12 @@ body.m-focus #intName{font-size:clamp(24px,7vw,40px)}
 #doneOv{position:fixed;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;gap:14px;
   background:rgba(6,9,14,.88);z-index:50;text-align:center}
 #doneOv h2{font-family:var(--disp);font-size:30px;color:var(--tape)}
+#handoffList{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+#handoffList .dv{display:flex;align-items:center;gap:10px;padding:11px 14px;border:1px solid var(--line);
+  border-radius:10px;font-size:13.5px;text-align:left;background:var(--panel)}
+#handoffList .dv b{flex:1}
+#handoffList .dv small{color:var(--faint)}
+#handoffList .note{color:var(--faint);font-size:12.5px;padding:4px 2px;text-align:center}
 #doneOv p{font-family:var(--mono);color:var(--muted)}
 </style>
 </head>
@@ -172,13 +196,19 @@ body.m-focus #intName{font-size:clamp(24px,7vw,40px)}
   <div id="strip"><canvas id="tl"></canvas><span id="liveTag"></span></div>
   <div id="hud">
     <div id="topInfo">
-      <div id="songLine"></div>
-      <div id="songTime"></div>
-      <div id="intName"></div>
+      <div id="songPair">
+        <div id="songLine"></div>
+        <div id="songTime"></div>
+      </div>
+      <div id="intPair">
+        <div id="intName"></div>
+        <div id="plPill"></div>
+      </div>
     </div>
     <div id="countWrap"><div id="count">0:00</div></div>
     <div id="totals"></div>
   </div>
+  <div id="progBar"><div id="progFill"></div></div>
   <div id="controls">
     <button id="exitBtn" title="End workout">✕</button>
     <button id="pauseBtn">PAUSE</button>
@@ -197,6 +227,11 @@ body.m-focus #intName{font-size:clamp(24px,7vw,40px)}
 </div>
 
 <div id="doneOv"><h2>WORKOUT COMPLETE</h2><p id="doneStats"></p>
+  <div id="handoffWrap" style="display:none;width:min(420px,92vw)">
+    <button class="cbtn primary" id="handoffBtn">Continue in Spotify</button>
+    <button class="cbtn" id="handoffOther" style="font-size:13px;padding:10px">Choose another device</button>
+    <div id="handoffList"></div>
+  </div>
   <button class="bigbtn primary" id="doneBtn" style="flex:0;padding:14px 40px">Done</button></div>
 <div id="toast"></div>
 
@@ -424,21 +459,18 @@ async function startWorkout(key){
   sizeCanvas();draw();updateHud();fitCount(true);
 }
 async function logWorkout(completed){
-  if(!window.NS_URL||!W){toast("Workout not logged — no profile connection");return}
+  if(!window.HIST_URL||!W){toast("Workout not logged — no profile connection");return}
   /* snapshot EVERYTHING synchronously: W is nulled the moment we return to the splash,
      so nothing after an await may touch it */
   const entry={id:Math.random().toString(36).slice(2,10),ts:Date.now(),
     key:W.key,name:W.ws.name||W.key,color:W.ws.color||null,
     planned:Math.round(W.total),elapsed:Math.round(Math.min(P.t,W.total)),completed:!!completed};
-  const url=window.NS_URL;
+  /* append-only endpoint: the server merges it into history-<user>.json, so no client
+     can overwrite the log by flushing a stale copy of its own state */
   try{
-    const r=await fetch(url,{cache:"no-store"});
-    const st=r.ok?(await r.json()||{}):{};
-    st.history=st.history||[];
-    st.history.push(entry);
-    const w=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify(st)});
-    if(!w.ok)throw new Error("save rejected ("+w.status+")");
+    const r=await fetch(window.HIST_URL,{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({op:"add",entry})});
+    if(!r.ok)throw new Error("save rejected ("+r.status+")");
     toast("Workout logged ✓ "+fmt(entry.elapsed));
   }catch(e){toast("Couldn't log workout: "+e.message,5000)}
 }
@@ -455,6 +487,13 @@ function endWorkout(showDone,doLog){
   if(showDone){cueDone();
     $("#doneStats").textContent=`${fmt(W.total)} · ${W.ws.sections.length} intervals · ${W.ws.name||""}`
       +(W.live?" · music still playing":"");
+    /* in-app playback dies when this page closes — offer to toss it to a real device */
+    const canHand=!!(W.live&&target==="sdk");
+    handoffCtx=canHand?{}:null;
+    $("#handoffWrap").style.display=canHand?"block":"none";
+    $("#handoffBtn").style.display="";$("#handoffOther").style.display="";
+    $("#handoffBtn").textContent="Continue in Spotify on "+thisDeviceWord;
+    $("#handoffList").innerHTML="";pendingLocal=false;
     $("#doneOv").style.display="flex";
   }else backToSplash();
 }
@@ -464,6 +503,95 @@ function backToSplash(){
   $("#work").style.display="none";$("#splash").style.display="flex";
   W=null;
 }
+/* ---- hand playback off to a real Spotify device, keeping the exact position ---- */
+let handoffCtx=null;   // {} snapshot; W may be cleared by the time this is used
+function openSpotifyApp(){
+  /* deep link: launches the native app (iOS/Android) or the desktop client */
+  const a=document.createElement("a");
+  a.href="spotify://";a.style.display="none";
+  document.body.appendChild(a);a.click();a.remove();
+  setTimeout(()=>{document.body.contains(a)&&a.remove()},0);
+}
+async function doHandoff(deviceId,name){
+  const list=$("#handoffList");
+  try{
+    /* 1. move playback (keeps track + position) */
+    await api("/me/player",{method:"PUT",body:{device_ids:[deviceId],play:true}});
+    /* 2. explicitly resume on that device — a backgrounded iOS app often ignores play:true */
+    try{await api("/me/player/play?device_id="+encodeURIComponent(deviceId),{method:"PUT"})}catch(e){}
+    /* 3. bring the Spotify app to the foreground, which is also what lets iOS start audio */
+    openSpotifyApp();
+    $("#handoffBtn").style.display="none";$("#handoffOther").style.display="none";
+    list.innerHTML=`<div class="note">Handed off to <b>${esc(name)}</b>. If it didn't start,
+      open Spotify and press play.</div>
+      <button class="dv" id="openSp" style="justify-content:center"><b style="flex:0">Open Spotify</b></button>`;
+    $("#openSp").onclick=async()=>{
+      try{await api("/me/player/play?device_id="+encodeURIComponent(deviceId),{method:"PUT"})}catch(e){}
+      openSpotifyApp();
+    };
+    toast("Playing on "+name,4000);
+  }catch(e){
+    toast("Handoff failed: "+e.message+". Open Spotify on that device and try again.",5000);
+  }
+}
+const isMobileUA=/iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+const thisDeviceWord=isMobileUA?"this phone":"this computer";
+/* Spotify device types: "Smartphone", "Tablet", "Computer", "Speaker", … — match the
+   class of hardware Pulseline is running on, so a handoff stays on the machine in your hand. */
+const looksLikeThisDevice=d=>isMobileUA
+  ?/^(Smartphone|Tablet)$/i.test(d.type||"")
+  :/^Computer$/i.test(d.type||"");
+const realDevices=j=>((j&&j.devices)||[]).filter(d=>d.id&&d.id!==sdkId&&!/^Pulseline$/i.test(d.name||""));
+
+async function findLocalDevice(){
+  try{return realDevices(await api("/me/player/devices")).find(looksLikeThisDevice)||null}
+  catch(e){return null}
+}
+/* If Spotify isn't running here it won't appear as a device at all. Open it, then pick it
+   up when you come back to this page (or when it registers while we're still foreground). */
+let pendingLocal=false;
+async function tryLocalHandoff(auto){
+  const list=$("#handoffList");
+  const d=await findLocalDevice();
+  if(d){pendingLocal=false;await doHandoff(d.id,d.name);return true}
+  if(auto)return false;
+  pendingLocal=true;
+  openSpotifyApp();
+  list.innerHTML=`<div class="note">Opening Spotify on ${thisDeviceWord}… if it doesn't start playing,
+    come back here and tap again.</div>`;
+  /* watch briefly in case it registers while we're still in the foreground */
+  let tries=0;
+  const iv=setInterval(async()=>{
+    if(!pendingLocal||++tries>12)return clearInterval(iv);
+    const dd=await findLocalDevice();
+    if(dd){clearInterval(iv);pendingLocal=false;doHandoff(dd.id,dd.name)}
+  },1200);
+  return false;
+}
+document.addEventListener("visibilitychange",()=>{   // returning from the Spotify app
+  if(document.visibilityState==="visible"&&pendingLocal)tryLocalHandoff(true);
+});
+$("#handoffBtn").onclick=()=>tryLocalHandoff(false);
+
+async function openHandoff(){          // explicit "choose another device"
+  const list=$("#handoffList");
+  pendingLocal=false;
+  list.innerHTML='<div class="note">Looking for your devices…</div>';
+  try{
+    const devs=realDevices(await api("/me/player/devices"));
+    if(!devs.length){
+      list.innerHTML='<div class="note">No devices found. Open Spotify on the device you want, then tap again.</div>';
+      return;
+    }
+    list.innerHTML=devs.map(d=>`<button class="dv" data-id="${esc(d.id)}" data-nm="${esc(d.name)}">
+      <b>${esc(d.name)}</b><small>${esc(d.type||"")}</small></button>`).join("");
+  }catch(e){list.innerHTML='<div class="note">Couldn\'t list devices: '+esc(e.message)+'</div>'}
+}
+$("#handoffOther").onclick=openHandoff;
+$("#handoffList").addEventListener("click",e=>{
+  const b=e.target.closest(".dv[data-id]");
+  if(b)doHandoff(b.dataset.id,b.dataset.nm);
+});
 $("#doneBtn").onclick=backToSplash;
 $("#exitBtn").onclick=()=>{
   if(!W)return;
@@ -572,6 +700,26 @@ function startPoll(){
   },5000);
 }
 
+/* ---------- perceptual brightness cap for the full-screen backdrop ----------
+   Full-bleed landscape paints the interval color across the whole screen, where a bright
+   yellow is genuinely painful and a deep purple is fine. We measure relative luminance
+   (sRGB → linear, weighted .2126R/.7152G/.0722B — which is why yellow reads far brighter
+   than purple at equal saturation) and, only if it exceeds a ceiling, scale the linear
+   channels toward it. Scaling in linear space preserves hue and saturation ratios, so the
+   color stays clearly recognisable — just no longer blinding. */
+const srgb2lin=c=>{c/=255;return c<=.04045?c/12.92:Math.pow((c+.055)/1.055,2.4)};
+const lin2srgb=c=>{const v=c<=.0031308?c*12.92:1.055*Math.pow(c,1/2.4)-.055;
+  return Math.max(0,Math.min(255,Math.round(v*255)))};
+const LUM_CEIL=.28;          // target max relative luminance for the full-screen backdrop
+function toneDown(hex,ceil=LUM_CEIL){
+  const m=/^#?([0-9a-f]{6})$/i.exec(hex||"");if(!m)return hex;
+  const n=parseInt(m[1],16),R=srgb2lin((n>>16)&255),G=srgb2lin((n>>8)&255),B=srgb2lin(n&255);
+  const L=.2126*R+.7152*G+.0722*B;
+  if(L<=ceil)return hex;                       // already comfortable — leave it alone
+  const k=Math.pow(ceil/L,.78);                // gentle: not a hard clamp to the ceiling
+  return "#"+[R*k,G*k,B*k].map(c=>lin2srgb(c).toString(16).padStart(2,"0")).join("");
+}
+
 /* ---------- timer: fixed-width cells + fit-to-box sizing ---------- */
 const CELL_D=.58,CELL_C=.26;              // em widths of a digit / colon cell (must match CSS)
 let lastTxt="",lastFit="";
@@ -608,10 +756,15 @@ function updateHud(){
   else{$("#songLine").innerHTML='<span class="art">— music ended —</span>';$("#songTime").textContent=""}
   if(sx){
     document.documentElement.style.setProperty("--ic",sx.s.color);
+    document.documentElement.style.setProperty("--icbg",toneDown(sx.s.color));
     $("#intName").textContent=sx.s.name;
+    const idx=W.secs.indexOf(sx)+1;
+    $("#plPill").innerHTML=`${esc(W.ws.name||"")} · <b>${idx}/${W.secs.length}</b>`;
     setCount(fmt(sx.end-P.t));
   }
   $("#totals").textContent=`T+ ${fmt(P.t)}  ·  ${fmt(W.total-P.t)} to go`;
+  const pct=W.total>0?Math.max(0,Math.min(1,P.t/W.total))*100:0;
+  $("#progFill").style.width=pct.toFixed(2)+"%";
 }
 
 /* ---------- sliding timeline strip (2-min window, playhead centred) ---------- */
@@ -761,6 +914,7 @@ function draw(){
     $("#who").textContent="Connected as "+(me.display_name||me.id);
     const ns="u_"+String(me.id).replace(/[^A-Za-z0-9_-]/g,"_").slice(0,48);
     window.NS_URL="/api/state/"+ns;
+    window.HIST_URL="/api/history/"+ns;
     let st={};
     try{const r=await fetch("/api/state/"+ns,{cache:"no-store"});if(r.ok)st=await r.json()||{}}catch(e){}
     workspaces=st.workspaces||{};

@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="theme-color" content="#0B0E13">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pulseline · Analysis</title>
+<link rel="icon" href="favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://sdk.scdn.co/spotify-player.js"></script>
+<style>
+:root{--bg:#10141B;--panel:#171C25;--panel2:#1D2430;--line:#242D3B;--ink:#E9EEF5;--muted:#8A96A8;
+  --faint:#5A667A;--tape:#F0B437;--alert:#FF3B5C;--ok:#4FC98B;--warn:#E7B94F;
+  --mono:'IBM Plex Mono',ui-monospace,monospace;--disp:'Chakra Petch',system-ui,sans-serif}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,sans-serif;padding:18px 22px 40px}
+#wrap{max-width:1100px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+select,input{font:inherit;color:var(--ink);background:var(--panel2);border:1px solid var(--line);
+  border-radius:7px;padding:7px 9px;outline:none}
+h1{font-family:var(--disp);font-size:20px;letter-spacing:.05em}
+h1 a{color:inherit;text-decoration:none}h1 em{font-style:normal;color:var(--tape)}
+h1 span{font-size:12px;color:var(--faint)}
+.top{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.nav a{font-family:var(--disp);font-weight:600;font-size:12.5px;color:var(--tape);text-decoration:none;
+  border:1px solid var(--line);border-radius:8px;padding:7px 12px;margin-left:8px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.card h2{font-family:var(--disp);font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.btn{font-family:var(--disp);font-weight:600;font-size:13px;padding:9px 15px;border-radius:8px;
+  border:1px solid var(--line);background:var(--panel2)}
+.btn:hover{border-color:var(--tape)}
+.btn.primary{background:var(--tape);color:#141414;border-color:var(--tape)}
+.btn.danger:hover{border-color:var(--alert);color:var(--alert)}
+.btn:disabled{opacity:.4;cursor:default}
+.pill{font-family:var(--mono);font-size:11.5px;padding:3px 10px;border-radius:20px;border:1px solid var(--line);color:var(--muted)}
+.pill.ok{color:var(--ok);border-color:rgba(79,201,139,.45)}
+.pill.bad{color:var(--alert);border-color:rgba(255,59,92,.45)}
+.pill.warn{color:var(--warn);border-color:rgba(231,185,79,.45)}
+.note{color:var(--faint);font-size:12.5px;line-height:1.55}
+label.chk{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--muted);cursor:pointer}
+label.chk input{accent-color:var(--tape);padding:0}
+/* track table */
+#tracks{display:flex;flex-direction:column;gap:4px}
+.trk{display:grid;grid-template-columns:26px 1fr 150px 62px 60px 74px 30px;gap:10px;align-items:center;
+  padding:7px 10px;border-radius:8px;border:1px solid transparent;background:var(--panel)}
+.trk.done{border-color:rgba(79,201,139,.22)}
+.trk.active{border-color:var(--tape);background:var(--panel2)}
+.trk .i{font-family:var(--mono);font-size:11px;color:var(--faint);text-align:right}
+.trk .nm{min-width:0}
+.trk .nm b{display:block;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.trk .nm small{color:var(--muted);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
+.trk canvas{width:150px;height:30px;display:block;background:#10141B;border-radius:4px}
+.trk .v{font-family:var(--mono);font-size:12px;text-align:right;color:var(--muted)}
+.trk .bpmCell{cursor:pointer;border-radius:4px}
+.trk .bpmCell:hover{background:var(--panel2);color:var(--ink)}
+.trk .v b{color:var(--ink);font-weight:600}
+.trk .st{font-family:var(--disp);font-size:10px;font-weight:700;letter-spacing:.1em;text-align:center;
+  padding:3px 0;border-radius:5px}
+.trk .st.q{color:var(--faint)}
+.trk .st.d{color:var(--ok)}
+.trk .st.a{color:var(--tape)}
+.trk .st.w{color:var(--warn)}
+.trk .rm{color:var(--faint);font-size:13px;text-align:center;border-radius:5px}
+.trk .rm:hover{color:var(--alert)}
+#prog{height:6px;background:var(--panel2);border-radius:3px;overflow:hidden;margin-top:8px}
+#progFill{height:100%;width:0;background:var(--tape);transition:width .3s}
+#live{display:none;gap:14px;align-items:center;margin-top:10px}
+#liveCv{width:100%;height:70px;background:#0B0E13;border-radius:8px;display:block}
+#toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:#0B0E13;border:1px solid var(--line);
+  border-radius:9px;padding:10px 16px;font-size:13px;display:none;z-index:99;max-width:92vw}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div class="top">
+    <h1><a href="./" title="Back to the editor">PULSE<em>LINE</em></a> <span>track analysis</span></h1>
+    <div class="nav"><a href="./">Editor</a><a href="workout.html">Workout</a><a href="calendar.html">Calendar</a></div>
+  </div>
+  <div id="who" class="note">Connecting…</div>
+
+  <div class="card">
+    <h2>Audio input</h2>
+    <div class="row">
+      <select id="inputSel" style="min-width:260px"><option>— checking devices —</option></select>
+      <button class="btn" id="refreshDev">Refresh</button>
+      <span id="loopTag" class="pill">loopback: unknown</span>
+      <span id="levelTag" class="pill">level: —</span>
+      <span id="engine" class="pill">engine: loading…</span>
+    </div>
+    <p class="note" style="margin-top:8px">Analysis listens to Spotify's own output through a virtual
+      loopback device, so it measures the exact master you'll hear — full length, not a preview.
+      See the README for the one-time routing setup on macOS / Windows / Linux.</p>
+  </div>
+
+  <div class="card">
+    <h2>Playlist</h2>
+    <div class="row">
+      <select id="plSel" style="min-width:300px"><option value="">— pick a playlist —</option></select>
+      <label class="chk"><input type="checkbox" id="reAll"> re-analyze tracks that already have data</label>
+      <label class="chk" title="Your personal tempo reference — used to scale the track score. Not a target.">
+        tempo ref <input id="bpmRef" type="number" min="60" max="220" step="1" value="120" style="width:62px;text-align:center"> bpm</label>
+      <label class="chk" title="Tempo is octave-ambiguous: 86 and 172 describe the same pulse. This shows whichever octave sits closest to your reference. The measured value is never altered.">
+        <input type="checkbox" id="foldOct" checked> show tempo nearest my reference</label>
+      <button class="btn primary" id="startBtn" disabled>Analyze</button>
+      <button class="btn danger" id="stopBtn" style="display:none">Stop</button>
+      <button class="btn" id="dumpBtn" title="Copy the full raw analysis of one track for troubleshooting">Copy raw dump</button>
+      <span id="counts" class="pill"></span>
+      <label class="chk" title="Which measurement to show in the table">
+        show <select id="colMetric" style="padding:5px 7px"></select></label>
+    </div>
+    <div id="prog"><div id="progFill"></div></div>
+    <div id="live">
+      <canvas id="liveCv"></canvas>
+    </div>
+  </div>
+
+  <div id="tracks"></div>
+  <p class="note" id="foot"></p>
+  <p class="note">Track analysis is stored once for the whole server, not per account — tempo and loudness are properties of the recording. A track analysed by anyone is analysed for everyone. Only your tempo reference and the energy weighting are personal.</p>
+  <p class="note">Tempo detection can lock onto a different grouping of the same pulse (half, double, or dotted time) — click any BPM value to correct it. An asterisk marks a manually set tempo, which is preserved if you re-analyze.</p>
+</div>
+<div id="toast"></div>
+
+<script src="config.js?v=4"></script>
+<script src="vendor/essentia-wasm.web.js?v=4"></script>
+<script src="vendor/essentia.js-core.min.js?v=4"></script>
+<script src="analysis-core.js?v=8"></script>
+<script>
+"use strict";
+const $=s=>document.querySelector(s);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const fmt=s=>{s=Math.max(0,Math.round(s));const m=Math.floor(s/60);return `${m}:${String(s%60).padStart(2,"0")}`};
+let toastT;function toast(m,ms=3200){const t=$("#toast");t.textContent=m;t.style.display="block";
+  clearTimeout(toastT);toastT=setTimeout(()=>t.style.display="none",ms)}
+
+/* ---------- auth (shares device tokens with the other pages) ---------- */
+const LSD={get:(k,d)=>{try{const v=localStorage.getItem("pl_"+k);return v==null?d:JSON.parse(v)}catch(e){return d}},
+           set:(k,v)=>localStorage.setItem("pl_"+k,JSON.stringify(v))};
+const CFG_ID=(typeof window.PULSELINE_CLIENT_ID==="string"&&/^[0-9a-f]{32}$/i.test(window.PULSELINE_CLIENT_ID))
+  ?window.PULSELINE_CLIENT_ID:null;
+async function ensureToken(){
+  let t=LSD.get("tok",null);
+  if(!t)throw new Error("Not connected — log in on the editor page first");
+  if(Date.now()<t.exp)return t.access;
+  const r=await fetch("https://accounts.spotify.com/api/token",{method:"POST",
+    headers:{"Content-Type":"application/x-www-form-urlencoded"},
+    body:new URLSearchParams({grant_type:"refresh_token",refresh_token:t.refresh,
+      client_id:LSD.get("clientId","")||CFG_ID||""})});
+  if(!r.ok)throw new Error("Session expired — reconnect on the editor page");
+  const j=await r.json();
+  t={access:j.access_token,refresh:j.refresh_token||t.refresh,scope:j.scope||t.scope,exp:Date.now()+(j.expires_in-60)*1000};
+  LSD.set("tok",t);return t.access;
+}
+async function api(path,opts={}){
+  const access=await ensureToken();
+  const r=await fetch("https://api.spotify.com/v1"+path,{method:opts.method||"GET",
+    headers:{Authorization:"Bearer "+access,...(opts.body?{"Content-Type":"application/json"}:{})},
+    body:opts.body?JSON.stringify(opts.body):undefined});
+  if(r.status===429){await new Promise(x=>setTimeout(x,2000));return api(path,opts)}
+  if(!r.ok)throw new Error("Spotify "+r.status);
+  return r.status===204?null:r.json();
+}
+
+/* ---------- state ---------- */
+let me=null,ANA_URL=null,STATE_URL=null,analysis={},playlists=[],tracks=[],resource=LSD.get("plResource","items");
+const bpmRef=()=>Math.max(60,Math.min(220,+$("#bpmRef").value||120));
+async function loadPrefs(){        // shares the editor's personal reference
+  try{const r=await fetch(STATE_URL,{cache:"no-store"});
+    if(r.ok){const st=await r.json();
+      if(st&&st.prefs){
+        if(Number.isFinite(+st.prefs.bpmRef))$("#bpmRef").value=+st.prefs.bpmRef;
+        if(st.prefs.colMetric)savedCol=st.prefs.colMetric;
+      }}}
+  catch(e){}
+}
+let savedCol=null;
+async function savePrefs(){
+  try{await fetch(STATE_URL,{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({prefs:{bpmRef:bpmRef(),colMetric:colMetric()}})})}catch(e){}
+}
+let running=false,abortRun=false,curIdx=-1;
+
+/* ---------- audio input ---------- */
+const LOOPBACK_HINTS=/blackhole|soundflower|loopback|vb-?audio|vb-?cable|cable output|voicemeeter|stereo mix|what u hear|monitor of|pulse|virtual/i;
+let inputs=[],chosen=null;
+async function listDevices(){
+  try{
+    // a permission grant is needed before labels are exposed
+    const probe=await navigator.mediaDevices.getUserMedia({audio:true});
+    probe.getTracks().forEach(t=>t.stop());
+  }catch(e){/* user may still pick a device manually */}
+  const devs=await navigator.mediaDevices.enumerateDevices();
+  inputs=devs.filter(d=>d.kind==="audioinput");
+  const sel=$("#inputSel");
+  sel.innerHTML=inputs.map((d,i)=>`<option value="${esc(d.deviceId)}">${esc(d.label||("input "+(i+1)))}</option>`).join("")
+    ||'<option value="">— no audio inputs —</option>';
+  const loop=inputs.find(d=>LOOPBACK_HINTS.test(d.label||""));
+  const tag=$("#loopTag");
+  if(loop){
+    sel.value=loop.deviceId;chosen=loop.deviceId;
+    tag.className="pill ok";tag.textContent="loopback detected: "+loop.label.slice(0,28);
+  }else if(inputs.length){
+    chosen=sel.value;
+    tag.className="pill warn";
+    tag.textContent="no loopback device found — see README";
+  }else{
+    tag.className="pill bad";tag.textContent="no audio inputs";
+  }
+  updateStart();
+}
+$("#refreshDev").onclick=listDevices;
+$("#inputSel").onchange=e=>{chosen=e.target.value;updateStart()};
+
+/* ---------- Spotify SDK player (analysis needs playback we control) ---------- */
+let sdk=null,sdkId=null,sdkReady=null;
+function initSdk(){
+  if(sdkReady||!window.Spotify)return sdkReady;
+  sdkReady=new Promise(resolve=>{
+    sdk=new Spotify.Player({name:"Pulseline Analyzer",getOAuthToken:cb=>ensureToken().then(cb),volume:1});
+    sdk.addListener("ready",({device_id})=>{sdkId=device_id;resolve(device_id)});
+    sdk.addListener("initialization_error",({message})=>{toast("Player init failed: "+message,5000);resolve(null)});
+    sdk.addListener("authentication_error",()=>{toast("Player auth failed — reconnect on the editor page",5000);resolve(null)});
+    sdk.addListener("account_error",()=>{toast("Analysis playback needs Spotify Premium",5000);resolve(null)});
+    sdk.connect();
+  });
+  return sdkReady;
+}
+window.onSpotifyWebPlaybackSDKReady=()=>initSdk();
+
+/* ---------- playlist loading ---------- */
+async function loadPlaylists(){
+  let items=[],url="/me/playlists?limit=50";
+  while(url){const j=await api(url);items=items.concat((j.items||[]).filter(p=>p&&p.id));
+    url=j.next?j.next.replace("https://api.spotify.com/v1",""):null}
+  playlists=items;
+  const tot=p=>{const t=(p.tracks&&p.tracks.total)??(p.items&&p.items.total);return Number.isFinite(t)?t:null};
+  $("#plSel").innerHTML='<option value="">— pick a playlist —</option>'+
+    items.map(p=>`<option value="${esc(p.id)}">${esc(p.name||"(untitled)")}${tot(p)!=null?` (${tot(p)})`:""}</option>`).join("");
+}
+async function loadTracks(pid){
+  const fields=w=>`limit=100&fields=next,items(${w}(id,uri,name,duration_ms,artists(name),is_local))`;
+  const attempt=async res=>{
+    const w=res==="items"?"item":"track";
+    let url=`/playlists/${pid}/${res}?${fields(w)}`,out=[];
+    while(url){const j=await api(url);out=out.concat(j.items||[]);
+      url=j.next?j.next.replace("https://api.spotify.com/v1",""):null}
+    return out;
+  };
+  let raw;
+  try{raw=await attempt(resource)}
+  catch(e){
+    if(!/403|404/.test(String(e.message)))throw e;
+    resource=resource==="items"?"tracks":"items";LSD.set("plResource",resource);
+    raw=await attempt(resource);
+  }
+  tracks=raw.map(i=>i&&(i.item||i.track)).filter(t=>t&&t.id&&!t.is_local).map(t=>({
+    id:t.id,uri:t.uri,name:t.name,artists:(t.artists||[]).map(a=>a.name).join(", "),durMs:t.duration_ms}));
+  renderTracks();
+}
+
+/* ---------- analysis store ---------- */
+async function loadAnalysis(){
+  try{const r=await fetch(ANA_URL,{cache:"no-store"});
+    analysis=r.ok?((await r.json()).tracks||{}):{}}
+  catch(e){analysis={}}
+}
+async function saveTrackAnalysis(id,data){
+  analysis[id]=data;
+  try{
+    const r=await fetch(ANA_URL,{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({op:"put",tracks:{[id]:data}})});
+    if(!r.ok)throw new Error(r.status);
+  }catch(e){toast("Couldn't save analysis: "+e.message,5000)}
+}
+async function deleteTrackAnalysis(id){
+  delete analysis[id];
+  try{await fetch(ANA_URL,{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({op:"delete",id})})}catch(e){}
+  renderTracks();
+}
+
+/* ---------- rendering ---------- */
+/* Energy is a view of the data, not part of it — computed per listener. */
+const colMetric=()=>$("#colMetric").value;
+function allMetricsText(rec){
+  return PLAnalysis.METRICS.filter(m=>!m.series)
+    .map(m=>`${m.label}: ${fmtMetric(rec,m.key)}`).join("\n");
+}
+function shownBpm(a){
+  if(!a||!a.bpm)return a?a.bpm:0;
+  if(a.bpmEdited)return a.bpm;                       // a human decided; leave it alone
+  return $("#foldOct").checked?PLAnalysis.foldToReference(a.bpm,bpmRef()):a.bpm;
+}
+/* All metrics shown as measured. No composite score, no invented normalisation. */
+function fmtMetric(rec,key){
+  const m=PLAnalysis.metricByKey(key);
+  const v=PLAnalysis.metricValue(rec,key);
+  if(v==null||Array.isArray(v))return "—";
+  const dp=Math.abs(v)>=100?0:(Math.abs(v)>=10?1:2);
+  return v.toFixed(dp)+(m.unit?" "+m.unit:"");
+}
+function sparkline(cv,curve,color){
+  const dpr=window.devicePixelRatio||1,w=cv.clientWidth||150,h=cv.clientHeight||30;
+  cv.width=w*dpr;cv.height=h*dpr;
+  const c=cv.getContext("2d");c.setTransform(dpr,0,0,dpr,0,0);
+  c.clearRect(0,0,w,h);
+  if(!curve||!curve.length)return;
+  c.beginPath();
+  curve.forEach((v,i)=>{
+    const x=i/(curve.length-1||1)*w, y=h-2-v*(h-4);
+    i?c.lineTo(x,y):c.moveTo(x,y);
+  });
+  c.lineTo(w,h);c.lineTo(0,h);c.closePath();
+  const g=c.createLinearGradient(0,0,0,h);
+  g.addColorStop(0,(color||"#F0B437")+"cc");g.addColorStop(1,(color||"#F0B437")+"18");
+  c.fillStyle=g;c.fill();
+  c.beginPath();
+  curve.forEach((v,i)=>{const x=i/(curve.length-1||1)*w,y=h-2-v*(h-4);i?c.lineTo(x,y):c.moveTo(x,y)});
+  c.strokeStyle=color||"#F0B437";c.lineWidth=1.2;c.stroke();
+}
+function renderTracks(){
+  const el=$("#tracks");
+  if(!tracks.length){el.innerHTML='<p class="note">Pick a playlist to see its tracks.</p>';updateCounts();return}
+  el.innerHTML=tracks.map((t,i)=>{
+    const a=analysis[t.id];
+    const st=a?(a.errors?'<span class="st w" title="'+esc(Object.keys(a.errors).join(", "))+' failed">PARTIAL</span>'
+                        :'<span class="st d">DONE</span>')
+             :'<span class="st q">QUEUED</span>';
+    return `<div class="trk${a?" done":""}" data-i="${i}" data-id="${esc(t.id)}">
+      <span class="i">${i+1}</span>
+      <span class="nm"><b>${esc(t.name)}</b><small>${esc(t.artists)}</small></span>
+      <canvas class="spark"></canvas>
+      <span class="v bpmCell" title="${a?"Click to correct the tempo":""}">${
+        a?`<b>${shownBpm(a)||"—"}</b> bpm${a.bpmEdited?" *":(shownBpm(a)!==a.bpm?" ×":"")}`:"—"}</span>
+      <span class="v" title="${a?esc(allMetricsText(a)):""}">${
+        a?`<b>${fmtMetric(a,colMetric())}</b>`:"—"}</span>
+      ${st}
+      <button class="rm" title="Clear this track's analysis">✕</button>
+    </div>`}).join("");
+  el.querySelectorAll(".trk").forEach(row=>{
+    const a=analysis[row.dataset.id];
+    if(a&&a.curve)sparkline(row.querySelector(".spark"),a.curve);
+  });
+  updateCounts();
+}
+function updateCounts(){
+  const done=tracks.filter(t=>analysis[t.id]).length;
+  $("#counts").textContent=tracks.length?`${done}/${tracks.length} analyzed`:"";
+  const pend=tracks.length-done;
+  const mins=Math.round(tracks.filter(t=>!analysis[t.id]).reduce((a,t)=>a+t.durMs,0)/60000);
+  $("#foot").textContent=tracks.length
+    ? (pend? `${pend} track${pend>1?"s":""} still to analyze — about ${mins} min of listening (analysis runs at playback speed).`
+           : "Every track in this playlist has analysis data.")
+    : "";
+  updateStart();
+}
+function updateStart(){
+  const pend=tracks.filter(t=>!analysis[t.id]).length;
+  const n=$("#reAll").checked?tracks.length:pend;
+  $("#startBtn").disabled=running||!n||!chosen;
+  $("#startBtn").textContent=n?`Analyze ${n} track${n>1?"s":""}`:"Analyze";
+}
+$("#reAll").onchange=updateCounts;
+$("#tracks").addEventListener("click",async e=>{
+  const row=e.target.closest(".trk");if(!row)return;
+  const id=row.dataset.id;
+  if(e.target.closest(".rm")){
+    if(confirm("Clear analysis for this track?"))deleteTrackAnalysis(id);
+    return;
+  }
+  /* Tempo is genuinely ambiguous for some tracks (half/double/dotted groupings all
+     "correct"), so a human can override — with the detected alternates offered. */
+  const cell=e.target.closest(".bpmCell");
+  if(cell){
+    const a=analysis[id];if(!a)return;
+    const oct=(a.essentia&&a.essentia.bpmOctaves||[]).join(", ");
+    const perc=a.essentia&&a.essentia.bpmPercival;
+    const alts=[oct?"octaves: "+oct:"",perc?"Percival estimate: "+perc:""].filter(Boolean).join(" · ")
+      ||(a.bpmAlts||[]).join(", ");
+    const v=prompt(`Tempo for "${a.name}"\n\nEssentia measured: ${a.bpm} bpm (confidence ${a.bpmConfidence??"?"}/5.32)`+
+      (alts?`\nOther readings of the same pulse: ${alts}`:"")+
+      `\n\nEnter the BPM you consider correct:`,String(a.bpm));
+    if(v===null)return;
+    const n=parseFloat(v);
+    if(!(n>=30&&n<=300)){toast("Enter a BPM between 30 and 300");return}
+    a.bpm=Math.round(n*10)/10;
+    a.bpmEdited=a.bpm!==a.bpmAuto;
+    await saveTrackAnalysis(id,a);
+    renderTracks();
+    toast("Tempo updated");
+  }
+});
+
+/* ---------- capture + analysis ---------- */
+let AC=null,srcNode=null,analyser=null,stream=null;
+async function openInput(){
+  if(stream)stream.getTracks().forEach(t=>t.stop());
+  stream=await navigator.mediaDevices.getUserMedia({audio:{
+    deviceId:chosen?{exact:chosen}:undefined,
+    /* every one of these is designed for speech and destroys music analysis —
+       AGC in particular would flatten the exact dynamics we're measuring */
+    echoCancellation:false,noiseSuppression:false,autoGainControl:false,
+    channelCount:2}});
+  AC=AC||new (window.AudioContext||window.webkitAudioContext)();
+  if(AC.state==="suspended")await AC.resume();
+  srcNode=AC.createMediaStreamSource(stream);
+  analyser=AC.createAnalyser();
+  analyser.fftSize=2048;analyser.smoothingTimeConstant=0;
+  srcNode.connect(analyser);
+  return AC.sampleRate;
+}
+/* Full-track PCM capture. Essentia's algorithms operate on the whole signal, so we
+   accumulate mono samples for the duration of the track and hand the buffer over. */
+let capNode=null,capChunks=[],capSamples=0;
+function startCapture(){
+  capChunks=[];capSamples=0;
+  const bufSize=4096;
+  capNode=AC.createScriptProcessor(bufSize,2,1);
+  capNode.onaudioprocess=e=>{
+    const L=e.inputBuffer.getChannelData(0);
+    const R=e.inputBuffer.numberOfChannels>1?e.inputBuffer.getChannelData(1):L;
+    const m=new Float32Array(L.length);
+    for(let i=0;i<L.length;i++)m[i]=(L[i]+R[i])/2;
+    capChunks.push(m);capSamples+=m.length;
+  };
+  srcNode.connect(capNode);
+  capNode.connect(AC.destination);          // required for onaudioprocess to fire
+}
+function stopCapture(){
+  if(capNode){try{srcNode.disconnect(capNode);capNode.disconnect()}catch(e){}capNode=null}
+  const out=new Float32Array(capSamples);
+  let off=0;for(const c of capChunks){out.set(c,off);off+=c.length}
+  capChunks=[];
+  return out;
+}
+/* live meter */
+let liveLevel=[];
+function drawLive(){
+  const cv=$("#liveCv"),dpr=window.devicePixelRatio||1;
+  const w=cv.clientWidth,h=cv.clientHeight;
+  cv.width=w*dpr;cv.height=h*dpr;
+  const c=cv.getContext("2d");c.setTransform(dpr,0,0,dpr,0,0);
+  c.clearRect(0,0,w,h);
+  const show=liveLevel.slice(-Math.floor(w));
+  c.beginPath();
+  show.forEach((r,i)=>{
+    const db=20*Math.log10(Math.max(r,1e-6));
+    const v=Math.max(0,Math.min(1,(db+60)/60));
+    const y=h-2-v*(h-4);
+    i?c.lineTo(i,y):c.moveTo(i,y);
+  });
+  c.strokeStyle="#F0B437";c.lineWidth=1.2;c.stroke();
+}
+async function analyzeTrack(t,idx){
+  curIdx=idx;renderActive();
+  const sr=AC.sampleRate;
+
+  await api(`/me/player/play?device_id=${encodeURIComponent(sdkId)}`,
+    {method:"PUT",body:{uris:[t.uri],position_ms:0}});
+  await new Promise(r=>setTimeout(r,900));    // let playback actually start
+
+  startCapture();
+  const durS=t.durMs/1000;
+  const t0=performance.now();
+  const meter=new Float32Array(analyser.fftSize);
+  let heard=false;
+  await new Promise(resolve=>{
+    const tick=()=>{
+      if(abortRun)return resolve();
+      analyser.getFloatTimeDomainData(meter);
+      let s=0;for(let i=0;i<meter.length;i++)s+=meter[i]*meter[i];
+      const r=Math.sqrt(s/meter.length);
+      if(r>0.002)heard=true;
+      liveLevel.push(r);if(liveLevel.length>4000)liveLevel.shift();
+      const el=(performance.now()-t0)/1000;
+      $("#progFill").style.width=Math.min(100,el/durS*100)+"%";
+      drawLive();
+      if(el>=durS-0.3)return resolve();
+      setTimeout(tick,60);
+    };
+    tick();
+  });
+  const pcm=stopCapture();
+  if(abortRun)return null;
+  if(!heard||pcm.length<sr*5)throw new Error("no audio captured on the selected input");
+
+  const A=await PLAnalysis.analyseSignal(pcm,sr,
+    stage=>toast(`Analysing "${t.name}" — ${stage}…`,4000));
+  if(A.errorCount)
+    toast(`"${t.name}": ${Object.keys(A.errors).join(", ")} failed — see raw dump`,5000);
+  const curve=PLAnalysis.loudnessCurve01(A.curveLufs);
+  /* The complete Essentia payload is stored verbatim: inputs, parameters, every
+     returned field, timings and errors. Nothing is filtered out, so a raw dump is
+     always sufficient to diagnose a result without re-running it. */
+  return {
+    name:t.name,artists:t.artists,durMs:t.durMs,
+    bpm:A.summary.bpm,bpmConfidence:A.summary.bpmConfidence,bpmAuto:A.summary.bpm,
+    curve,curveLufs:A.curveLufs,curveHz:A.curveHz,
+    curveIsRmsFallback:!!A.curveIsRmsFallback,
+    essentia:A.summary,
+    raw:A,                                   // full input/params/results/errors/timings
+    errors:A.errorCount?A.errors:null,
+    engine:"essentia.js",analyzedAt:Date.now(),v:PLAnalysis.ANALYSIS_VERSION};
+}
+function renderActive(){
+  document.querySelectorAll(".trk").forEach((r,i)=>{
+    r.classList.toggle("active",i===curIdx);
+    const st=r.querySelector(".st");
+    if(i===curIdx&&st){st.className="st a";st.textContent="ANALYZING"}
+  });
+}
+
+async function runAnalysis(){
+  const queue=tracks.map((t,i)=>({t,i})).filter(({t})=>$("#reAll").checked||!analysis[t.id]);
+  if(!queue.length)return;
+  running=true;abortRun=false;
+  $("#startBtn").style.display="none";$("#stopBtn").style.display="";
+  $("#live").style.display="flex";
+  let ok=0,fail=0;
+  try{
+    await openInput();
+    const id=await Promise.race([initSdk()||Promise.resolve(null),
+      new Promise(r=>setTimeout(()=>r(sdkId),8000))]);
+    if(!id)throw new Error("in-browser Spotify player unavailable");
+    for(const {t,i} of queue){
+      if(abortRun)break;
+      try{
+        const res=await analyzeTrack(t,i);
+        if(res){
+          const prev=analysis[t.id];
+          if(prev&&prev.bpmEdited){          // a human corrected this tempo; keep it
+            res.bpm=prev.bpm;res.bpmEdited=true;
+          }
+          await saveTrackAnalysis(t.id,res);ok++;renderTracks();renderActive();
+        }
+      }catch(e){fail++;toast(`"${t.name}" failed: ${e.message}`,4500);
+        if(/no audio detected/.test(e.message))break;}
+    }
+  }catch(e){toast(e.message,6000)}
+  finally{
+    try{await sdk?.pause()}catch(e){}
+    if(stream){stream.getTracks().forEach(x=>x.stop());stream=null}
+    running=false;abortRun=false;curIdx=-1;
+    $("#startBtn").style.display="";$("#stopBtn").style.display="none";
+    $("#live").style.display="none";$("#progFill").style.width="0";
+    renderTracks();
+    toast(`Analysis finished — ${ok} analyzed${fail?`, ${fail} failed`:""}`,5000);
+  }
+}
+/* Raw dump: everything measured for one track, for eyeballing or sharing when a
+   number looks wrong. Includes the features behind the score, not just the score. */
+$("#dumpBtn").onclick=async()=>{
+  const done=tracks.filter(t=>analysis[t.id]);
+  if(!done.length){toast("Analyze a track first");return}
+  const pick=prompt(
+    "Raw dump — everything fed to Essentia and everything it returned.\n\n"+
+    "Track number, or 'all' for every analysed track,\n"+
+    "or 'slim' to omit the long per-frame arrays.",
+    String(tracks.indexOf(done[0])+1));
+  if(pick===null)return;
+  const slim=/^slim$/i.test(pick.trim());
+  const strip=rec=>{
+    if(!slim||!rec.raw)return rec;
+    const r=JSON.parse(JSON.stringify(rec));
+    if(r.raw.results){
+      const R=r.raw.results;
+      if(R.RhythmExtractor2013){
+        ["beats_position","bpm_estimates","bpm_intervals"].forEach(k=>{
+          if(R.RhythmExtractor2013[k])R.RhythmExtractor2013[k]=
+            `[${R.RhythmExtractor2013[k].length} values omitted]`});
+      }
+      if(R.Danceability&&R.Danceability.dfa)R.Danceability.dfa=`[${R.Danceability.dfa.length} values omitted]`;
+      if(R.LoudnessEBUR128){
+        ["shortTermLoudness","momentaryLoudness"].forEach(k=>{
+          if(R.LoudnessEBUR128[k])R.LoudnessEBUR128[k]=`[${R.LoudnessEBUR128[k].length} values omitted]`});
+      }
+    }
+    if(r.curveLufs)r.curveLufs=`[${r.curveLufs.length} values omitted]`;
+    if(r.curve)r.curve=`[${r.curve.length} values omitted]`;
+    return r;
+  };
+  const env={dumpVersion:4,generatedAt:new Date().toISOString(),
+    bpmRef:bpmRef(),
+    context:{audioContextRate:AC?AC.sampleRate:null,
+      inputDevice:(inputs.find(d=>d.deviceId===chosen)||{}).label||null,
+      userAgent:navigator.userAgent,
+      essentiaLoaded:!!(window.PLAnalysis&&PLAnalysis.essentia)}};
+  let payload;
+  if(/^(all|slim)$/i.test(pick.trim())){
+    payload={...env,tracks:done.map(t=>strip({id:t.id,...analysis[t.id]}))};
+  }else{
+    const i=parseInt(pick,10)-1,t=tracks[i];
+    if(!t||!analysis[t.id]){toast("No analysis for that track");return}
+    payload={...env,track:strip({id:t.id,...analysis[t.id]})};
+  }
+  const txt=JSON.stringify(payload,null,1);
+  try{await navigator.clipboard.writeText(txt)}
+  catch(e){const ta=document.createElement("textarea");ta.value=txt;
+    document.body.appendChild(ta);ta.select();document.execCommand("copy");ta.remove()}
+  toast(`Raw dump copied — ${(txt.length/1024).toFixed(0)} KB`+(slim?" (slim)":""),4500);
+};
+$("#startBtn").onclick=runAnalysis;
+$("#stopBtn").onclick=()=>{abortRun=true;toast("Stopping after this track…")};
+$("#plSel").onchange=async e=>{
+  if(!e.target.value){tracks=[];renderTracks();return}
+  try{await loadTracks(e.target.value)}catch(err){toast(err.message,5000)}
+};
+
+/* ---------- level meter while idle ---------- */
+async function idleMeter(){
+  if(running||!chosen)return;
+  try{
+    const s=await navigator.mediaDevices.getUserMedia({audio:{deviceId:{exact:chosen},
+      echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+    const ac=new (window.AudioContext||window.webkitAudioContext)();
+    const an=ac.createAnalyser();an.fftSize=2048;
+    ac.createMediaStreamSource(s).connect(an);
+    const buf=new Float32Array(an.fftSize);
+    let peak=0,n=0;
+    const iv=setInterval(()=>{
+      an.getFloatTimeDomainData(buf);
+      let s=0;for(let i=0;i<buf.length;i++)s+=buf[i]*buf[i];
+      peak=Math.max(peak,Math.sqrt(s/buf.length));
+      if(++n>20){
+        clearInterval(iv);s.getTracks().forEach(t=>t.stop());ac.close();
+        const tag=$("#levelTag");
+        const rateNote=ac.sampleRate!==44100?` · ${ac.sampleRate}Hz → resampled to 44100`:" · 44100Hz";
+        if(peak>0.002){tag.className="pill ok";tag.textContent="level: signal detected"+rateNote}
+        else{tag.className="pill warn";tag.textContent="level: silent (play something to test)"}
+      }
+    },100);
+  }catch(e){$("#levelTag").className="pill bad";$("#levelTag").textContent="level: no access"}
+}
+$("#inputSel").addEventListener("change",()=>setTimeout(idleMeter,200));
+
+/* ---------- boot ---------- */
+(async()=>{
+  const NEEDS_CORE=8;
+  if(window.PLAnalysis&&PLAnalysis.ANALYSIS_VERSION!==NEEDS_CORE){
+    $("#who").innerHTML='<span style="color:var(--alert)">Version mismatch: this page needs '+
+      'analysis-core.js v'+NEEDS_CORE+' but loaded v'+PLAnalysis.ANALYSIS_VERSION+'. '+
+      'Copy the current <b>analysis-core.js</b>, restart server.py, then hard-refresh '+
+      '(<b>Ctrl+Shift+R</b>).</span>';
+    return;
+  }
+  if(!window.PLAnalysis){
+    $("#who").innerHTML='<span style="color:var(--alert)">analysis-core.js failed to load. '+
+      'Hard-refresh (<b>Ctrl+Shift+R</b>) and restart server.py.</span>';
+    return;
+  }
+  try{
+    await PLAnalysis.loadEssentia();
+    $("#engine").textContent="engine: Essentia.js v"+PLAnalysis.ANALYSIS_VERSION+" ready";
+    $("#engine").className="pill ok";
+  }catch(e){
+    $("#engine").textContent="engine: Essentia failed to load";
+    $("#engine").className="pill bad";
+    $("#who").innerHTML='<span style="color:var(--alert)">Essentia.js could not start: '+esc(e.message)+
+      '. Check that vendor/ files are present.</span>';
+    return;
+  }
+  try{
+    me=await api("/me");
+    $("#who").textContent="Connected as "+(me.display_name||me.id);
+    const ns="u_"+String(me.id).replace(/[^A-Za-z0-9_-]/g,"_").slice(0,48);
+    ANA_URL="/api/analysis";           // shared: analysis describes the song, not the listener
+    STATE_URL="/api/state/"+ns;
+    await loadPrefs();
+    $("#bpmRef").addEventListener("change",()=>{$("#bpmRef").value=bpmRef();savePrefs();renderTracks()});
+    $("#foldOct").addEventListener("change",renderTracks);
+    $("#colMetric").innerHTML=PLAnalysis.METRICS.filter(m=>!m.series)
+      .map(m=>`<option value="${m.key}">${esc(m.label)}${m.unit?" ("+esc(m.unit)+")":""}</option>`).join("");
+    $("#colMetric").value=savedCol||"danceability";
+    $("#colMetric").addEventListener("change",()=>{savePrefs();renderTracks()});
+    await loadAnalysis();
+    await loadPlaylists();
+    await listDevices();
+    renderTracks();
+    initSdk();
+    setTimeout(idleMeter,400);
+  }catch(e){
+    $("#who").innerHTML=esc(e.message)+' — <a href="./" style="color:var(--tape)">go to the editor</a> to connect.';
+  }
+})();
+</script>
+</body>
+</html>
