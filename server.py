@@ -51,8 +51,10 @@ def analysis_path(path):
 # also carries per-frame arrays (momentary loudness alone is ~2250 floats per track)
 # which are only needed by the analysis page and raw dumps.
 _summary_cache = {"mtime": None, "size": None, "data": None}
+
 SUMMARY_KEEP = ("name", "artists", "durMs", "bpm", "bpmAuto", "bpmEdited",
                 "bpmConfidence", "curveHz", "curveIsRmsFallback", "engine", "v", "analyzedAt")
+
 
 
 def analysis_summary():
@@ -132,6 +134,7 @@ def write_json_atomic(path, obj, keep_backups=3):
         for i in range(keep_backups - 1, 0, -1):
             older, newer = f"{path}.bak{i}", f"{path}.bak{i - 1}" if i > 1 else f"{path}.bak"
             if os.path.exists(newer):
+
                 try:
                     os.replace(newer, older)
                 except OSError:
@@ -157,6 +160,7 @@ class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=ROOT, **kwargs)
 
+
     def _json(self, obj, code=200):
         body = json.dumps(obj).encode("utf-8")
         self.send_response(code)
@@ -167,6 +171,7 @@ class Handler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+
         ap = analysis_path(self.path)
         if ap:
             migrate_analysis()
@@ -260,13 +265,16 @@ class Handler(SimpleHTTPRequestHandler):
             self._json({"history": hist})
             return
 
+
         sp = state_path(self.path)
         if sp is None:
             self.send_response(404)
             self.end_headers()
             return
+
         # Shallow-merge top-level keys: a client that doesn't know about a key can never
         # delete it by omission (this is what used to wipe history).
+
         cur = read_json(sp, {})
         cur.update(payload)
         cur.pop("history", None)  # history has its own file now
@@ -289,10 +297,15 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8888
-    print(f"Pulseline running at http://127.0.0.1:{port}/")
+    # Usage: server.py [port] [host]
+    # Host defaults to loopback, which is what you want when a tunnel (cloudflared)
+    # runs on the same machine. Use 0.0.0.0 to also serve the local network.
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.environ.get("PULSELINE_PORT", 8888))
+    host = sys.argv[2] if len(sys.argv) > 2 else os.environ.get("PULSELINE_HOST", "127.0.0.1")
+    print(f"Pulseline running at http://{host}:{port}/")
     print(f"State files: {DATA_DIR}/state-<spotify-user>.json (one per account)")
     try:
-        HTTPServer(("127.0.0.1", port), Handler).serve_forever()
+        HTTPServer((host, port), Handler).serve_forever()
     except KeyboardInterrupt:
         print("\nStopped.")
+

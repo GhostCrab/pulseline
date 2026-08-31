@@ -1,0 +1,38 @@
+[Unit]
+Description=Pulseline — interval workout / playlist sync
+Documentation=https://github.com/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pulseline
+Group=pulseline
+
+# Application directory. Change both of these together if you install elsewhere.
+WorkingDirectory=/opt/pulseline
+ExecStart=/usr/bin/python3 /opt/pulseline/server.py 8888
+
+# Unbuffered output so journalctl shows log lines as they happen rather than in blocks.
+Environment=PYTHONUNBUFFERED=1
+
+Restart=always
+RestartSec=3
+
+# --- hardening -------------------------------------------------------------
+# ProtectSystem=full mounts /usr, /boot AND /etc read-only. That is why the app
+# should not live in /etc: the server needs to write its data directory.
+# ReadWritePaths re-opens just the one directory it must write.
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+ReadWritePaths=/opt/pulseline/data
+
+# The server only listens on loopback by default, so no capabilities are needed.
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target
+
