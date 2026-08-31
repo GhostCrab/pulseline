@@ -581,18 +581,74 @@ function openSpotifyApp(){
   document.body.appendChild(a);a.click();a.remove();
   setTimeout(()=>{document.body.contains(a)&&a.remove()},0);
 }
+/* Handing playback to another device replays the last half-second or so, because a
+   plain transfer resumes from a position captured BEFORE the request — the network
+   round trip and the target's buffer startup both get replayed as audible repeat.
+
+   Instead of transferring, we read the exact position with a timestamp, then start
+   playback on the target with an explicit position_ms that adds the time actually
+   elapsed since that reading plus an allowance for the device to start. The
+   allowance is then measured against reality and remembered, so it self-corrects to
+   whatever this network and device are really like. */
+const DEFAULT_START_MS=550;
+function startupAllowance(){
+  const v=+LSD.get("handoffLeadMs",DEFAULT_START_MS);
+  return Number.isFinite(v)?Math.max(0,Math.min(2500,v)):DEFAULT_START_MS;
+}
+async function livePosition(){
+  /* position in ms, with the monotonic clock reading taken at the same instant */
+  if(target==="sdk"&&sdk){
+    try{
+      const st=await sdk.getCurrentState();
+      if(st)return {pos:st.position,at:performance.now(),
+        ctx:st.context&&st.context.uri||null,
+        uri:st.track_window&&st.track_window.current_track&&st.track_window.current_track.uri||null};
+    }catch(e){}
+  }
+  try{
+    const st=await api("/me/player");
+    if(st&&st.item)return {pos:st.progress_ms||0,at:performance.now(),
+      ctx:st.context&&st.context.uri||null,uri:st.item.uri};
+  }catch(e){}
+  return null;
+}
 async function doHandoff(deviceId,name){
   const list=$("#handoffList");
   try{
-    /* 1. move playback (keeps track + position) */
-    await api("/me/player",{method:"PUT",body:{device_ids:[deviceId],play:true}});
-    /* 2. explicitly resume on that device — a backgrounded iOS app often ignores play:true */
-    try{await api("/me/player/play?device_id="+encodeURIComponent(deviceId),{method:"PUT"})}catch(e){}
-    /* 3. bring the Spotify app to the foreground, which is also what lets iOS start audio */
+    const p=await livePosition();
+    let seamless=false;
+    if(p&&p.uri){
+      const lead=startupAllowance();
+      const body=p.ctx?{context_uri:p.ctx,offset:{uri:p.uri}}:{uris:[p.uri]};
+      /* computed at the moment of sending, so the reading's own age is included */
+      body.position_ms=Math.max(0,Math.round(p.pos+(performance.now()-p.at)+lead));
+      const sentAt=performance.now(),wanted=body.position_ms;
+      await api("/me/player/play?device_id="+encodeURIComponent(deviceId),{method:"PUT",body});
+      seamless=true;
+      if(target==="sdk"&&sdk)sdk.pause().catch(()=>{});   // stop the local copy immediately
+      /* Learn the real startup cost: compare where the device actually is against
+         where it should be by now, and nudge the allowance toward the truth. */
+      setTimeout(async()=>{
+        try{
+          const st=await api("/me/player");
+          if(!st||!st.is_playing||!Number.isFinite(st.progress_ms))return;
+          const expected=wanted+(performance.now()-sentAt);
+          const drift=expected-st.progress_ms;        // >0 means it started too early (repeat)
+          if(Math.abs(drift)<3000){
+            const next=Math.round(startupAllowance()*0.6+(startupAllowance()+drift)*0.4);
+            LSD.set("handoffLeadMs",Math.max(0,Math.min(2500,next)));
+          }
+        }catch(e){}
+      },2500);
+    }else{
+      /* no readable position: fall back to a plain transfer */
+      await api("/me/player",{method:"PUT",body:{device_ids:[deviceId],play:true}});
+      try{await api("/me/player/play?device_id="+encodeURIComponent(deviceId),{method:"PUT"})}catch(e){}
+    }
     openSpotifyApp();
     $("#handoffBtn").style.display="none";$("#handoffOther").style.display="none";
-    list.innerHTML=`<div class="note">Handed off to <b>${esc(name)}</b>. If it didn't start,
-      open Spotify and press play.</div>
+    list.innerHTML=`<div class="note">Handed off to <b>${esc(name)}</b>${seamless?"":" (position may jump slightly)"}.
+      If it didn't start, open Spotify and press play.</div>
       <button class="dv" id="openSp" style="justify-content:center"><b style="flex:0">Open Spotify</b></button>`;
     $("#openSp").onclick=async()=>{
       try{await api("/me/player/play?device_id="+encodeURIComponent(deviceId),{method:"PUT"})}catch(e){}
@@ -603,45 +659,6 @@ async function doHandoff(deviceId,name){
     toast("Handoff failed: "+e.message+". Open Spotify on that device and try again.",5000);
   }
 }
-const isMobileUA=/iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-const thisDeviceWord=isMobileUA?"this phone":"this computer";
-/* Spotify device types: "Smartphone", "Tablet", "Computer", "Speaker", … — match the
-   class of hardware Pulseline is running on, so a handoff stays on the machine in your hand. */
-const looksLikeThisDevice=d=>isMobileUA
-  ?/^(Smartphone|Tablet)$/i.test(d.type||"")
-  :/^Computer$/i.test(d.type||"");
-const realDevices=j=>((j&&j.devices)||[]).filter(d=>d.id&&d.id!==sdkId&&!/^Pulseline$/i.test(d.name||""));
-
-async function findLocalDevice(){
-  try{return realDevices(await api("/me/player/devices")).find(looksLikeThisDevice)||null}
-  catch(e){return null}
-}
-/* If Spotify isn't running here it won't appear as a device at all. Open it, then pick it
-   up when you come back to this page (or when it registers while we're still foreground). */
-let pendingLocal=false;
-async function tryLocalHandoff(auto){
-  const list=$("#handoffList");
-  const d=await findLocalDevice();
-  if(d){pendingLocal=false;await doHandoff(d.id,d.name);return true}
-  if(auto)return false;
-  pendingLocal=true;
-  openSpotifyApp();
-  list.innerHTML=`<div class="note">Opening Spotify on ${thisDeviceWord}… if it doesn't start playing,
-    come back here and tap again.</div>`;
-  /* watch briefly in case it registers while we're still in the foreground */
-  let tries=0;
-  const iv=setInterval(async()=>{
-    if(!pendingLocal||++tries>12)return clearInterval(iv);
-    const dd=await findLocalDevice();
-    if(dd){clearInterval(iv);pendingLocal=false;doHandoff(dd.id,dd.name)}
-  },1200);
-  return false;
-}
-document.addEventListener("visibilitychange",()=>{   // returning from the Spotify app
-  if(document.visibilityState==="visible"&&pendingLocal)tryLocalHandoff(true);
-});
-$("#handoffBtn").onclick=()=>tryLocalHandoff(false);
-
 async function openHandoff(){          // explicit "choose another device"
   const list=$("#handoffList");
   pendingLocal=false;
