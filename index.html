@@ -442,7 +442,7 @@ async function tokenRequest(body){
   const r=await fetch("https://accounts.spotify.com/api/token",{method:"POST",
     headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams(body)});
   if(!r.ok){const err=new Error("Spotify login "+(r.status===400||r.status===401?"session expired":"failed ("+r.status+")"));
-    err.auth=(r.status===400||r.status===401);throw err}
+    err.auth=(r.status===400||r.status===401);throw err}   // only 400/401 mean re-login
   const j=await r.json();
   AUTH.tok={access:j.access_token,refresh:j.refresh_token||(AUTH.tok&&AUTH.tok.refresh),
     scope:j.scope||(AUTH.tok&&AUTH.tok.scope)||"",exp:Date.now()+ (j.expires_in-60)*1000};
@@ -456,19 +456,50 @@ async function handleRedirect(){
     client_id:AUTH.clientId,code_verifier:LSD.get("verifier","")});
   return true;
 }
-async function ensureToken(){
-  const t=AUTH.tok; if(!t)throw new Error("Not connected");
-  if(Date.now()<t.exp)return t.access;
-  await tokenRequest({grant_type:"refresh_token",refresh_token:t.refresh,client_id:AUTH.clientId});
-  return AUTH.tok.access;
+/* Single-flight refresh with retry — concurrent callers must not race on a rotating
+   refresh token, and a failure caused by a sleeping radio is not a dead session. */
+let refreshPromise=null;
+const SKEW_MS=120000;
+async function refreshToken(){
+  if(refreshPromise)return refreshPromise;
+  refreshPromise=(async()=>{
+    const t=AUTH.tok;
+    if(!t||!t.refresh){const e=new Error("Not connected");e.auth=true;throw e}
+    let last=null;
+    for(let a=0;a<4;a++){
+      try{await tokenRequest({grant_type:"refresh_token",refresh_token:t.refresh,client_id:AUTH.clientId});
+        return AUTH.tok.access}
+      catch(e){last=e;if(e.auth)throw e;await new Promise(r=>setTimeout(r,[400,1200,3000][a]||3000))}
+    }
+    throw last||new Error("token refresh failed");
+  })().finally(()=>{refreshPromise=null});
+  return refreshPromise;
 }
-async function api(path,opts={}){
+async function ensureToken(force){
+  const t=AUTH.tok;
+  if(!t){const e=new Error("Not connected");e.auth=true;throw e}
+  if(!force&&Date.now()<t.exp-SKEW_MS)return t.access;
+  return refreshToken();
+}
+async function api(path,opts={},_depth=0){
   const access=await ensureToken();
-  const r=await fetch("https://api.spotify.com/v1"+path,{method:opts.method||"GET",
-    headers:{Authorization:"Bearer "+access,...(opts.body?{"Content-Type":"application/json"}:{})},
-    body:opts.body?JSON.stringify(opts.body):undefined});
-  if(r.status===429){const w=(+r.headers.get("Retry-After")||2)*1000;
-    await new Promise(res=>setTimeout(res,w));return api(path,opts)}
+  let r;
+  try{
+    r=await fetch("https://api.spotify.com/v1"+path,{method:opts.method||"GET",
+      headers:{Authorization:"Bearer "+access,...(opts.body?{"Content-Type":"application/json"}:{})},
+      body:opts.body?JSON.stringify(opts.body):undefined});
+  }catch(e){                                   // offline / DNS / asleep: transient
+    if(_depth<3){await new Promise(x=>setTimeout(x,[500,1500,4000][_depth]));return api(path,opts,_depth+1)}
+    const err=new Error("network unreachable");throw err;
+  }
+  if(r.status===401&&_depth<2){                // force one refresh, then retry
+    try{await ensureToken(true)}catch(e){if(e.auth)throw e}
+    return api(path,opts,_depth+1);
+  }
+  if((r.status===429||r.status>=500)&&_depth<3){
+    const wait=r.status===429?(+r.headers.get("Retry-After")||2)*1000:[600,1800,4000][_depth];
+    await new Promise(x=>setTimeout(x,wait));return api(path,opts,_depth+1);
+  }
   if(!r.ok){const tx=await r.text();const err=new Error(`Spotify ${r.status}: ${tx.slice(0,140)}`);
     err.auth=(r.status===401);throw err}
   return r.status===204?null:r.json();
@@ -1792,6 +1823,7 @@ window.addEventListener("beforeunload",e=>{if(state.dirty){e.preventDefault();e.
       const me=await loadUser();
       await switchToUserNs(me.id);       // per-account state, keyed by Spotify identity
       loadAnalysis();                    // fire and forget — the lane redraws when ready
+      LSD.set("ns","u_"+String(me.id).replace(/[^A-Za-z0-9_-]/g,"_").slice(0,48));
       const pf=LS.get("prefs",null);
       if(pf&&Number.isFinite(+pf.bpmRef))state.bpmRef=+pf.bpmRef;
       if(pf&&pf.metric)state.metric=pf.metric;

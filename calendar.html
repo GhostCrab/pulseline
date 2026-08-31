@@ -70,6 +70,10 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
   color:var(--muted);margin:4px 0 8px}
 #dayDetail,#listView{display:flex;flex-direction:column;gap:8px}
 .empty{color:var(--faint);font-size:13px;padding:8px 2px}
+#banner{background:rgba(255,59,92,.08);border:1px solid rgba(255,59,92,.35);border-radius:9px;
+  padding:10px 14px;font-size:13px;color:var(--ink);display:flex;gap:10px;align-items:center}
+#banner button{font-family:var(--disp);font-weight:600;font-size:12px;color:var(--tape);
+  border:1px solid var(--line);border-radius:7px;padding:5px 10px;white-space:nowrap}
 #toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:#0B0E13;border:1px solid var(--line);
   border-radius:10px;padding:10px 16px;font-size:13px;display:none;z-index:99}
 </style>
@@ -82,6 +86,7 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
       text-decoration:none;border:1px solid var(--line);border-radius:8px;padding:7px 12px;white-space:nowrap">Workout</a>
   </div>
   <div id="who">Loading…</div>
+  <div id="banner" style="display:none"></div>
   <div id="tabs">
     <button id="tabCal" class="on">Calendar</button>
     <button id="tabList">History</button>
@@ -117,45 +122,101 @@ const dayKey=ts=>{const d=new Date(ts);
 /* ---- auth: same device tokens as the other pages ---- */
 const LSD={get:(k,d)=>{try{const v=localStorage.getItem("pl_"+k);return v==null?d:JSON.parse(v)}catch(e){return d}},
            set:(k,v)=>localStorage.setItem("pl_"+k,JSON.stringify(v))};
+let refreshPromise=null;
 async function ensureToken(){
-  let t=LSD.get("tok",null);if(!t)throw new Error("Not connected — log in on the editor or workout page first");
-  if(Date.now()<t.exp)return t.access;
-  const r=await fetch("https://accounts.spotify.com/api/token",{method:"POST",
-    headers:{"Content-Type":"application/x-www-form-urlencoded"},
-    body:new URLSearchParams({grant_type:"refresh_token",refresh_token:t.refresh,
-      client_id:LSD.get("clientId","")||(typeof window.PULSELINE_CLIENT_ID==="string"?window.PULSELINE_CLIENT_ID:"")})});
-  if(!r.ok)throw new Error("Spotify session expired — reconnect on the editor page");
-  const j=await r.json();
-  t={access:j.access_token,refresh:j.refresh_token||t.refresh,scope:j.scope||t.scope,exp:Date.now()+(j.expires_in-60)*1000};
-  LSD.set("tok",t);return t.access;
+  let t=LSD.get("tok",null);
+  if(!t){const e=new Error("Not connected — log in on the editor or workout page first");e.auth=true;throw e}
+  if(Date.now()<t.exp-120000)return t.access;
+  if(refreshPromise)return refreshPromise;                     // single flight
+  refreshPromise=(async()=>{
+    let last=null;
+    for(let a=0;a<3;a++){
+      try{
+        const r=await fetch("https://accounts.spotify.com/api/token",{method:"POST",
+          headers:{"Content-Type":"application/x-www-form-urlencoded"},
+          body:new URLSearchParams({grant_type:"refresh_token",refresh_token:t.refresh,
+            client_id:LSD.get("clientId","")||(typeof window.PULSELINE_CLIENT_ID==="string"?window.PULSELINE_CLIENT_ID:"")})});
+        if(!r.ok){
+          const e=new Error("Spotify session expired — reconnect on the editor page");
+          e.auth=(r.status===400||r.status===401);
+          if(e.auth)throw e;
+          throw new Error("token refresh failed ("+r.status+")");
+        }
+        const j=await r.json();
+        t={access:j.access_token,refresh:j.refresh_token||t.refresh,scope:j.scope||t.scope,
+           exp:Date.now()+(j.expires_in-60)*1000};
+        LSD.set("tok",t);return t.access;
+      }catch(e){last=e;if(e.auth)throw e;await new Promise(r2=>setTimeout(r2,[400,1500][a]||1500))}
+    }
+    throw last;
+  })().finally(()=>{refreshPromise=null});
+  return refreshPromise;
 }
 
 /* ---- state ---- */
-let NS_URL=null,userState={},history=[];
+let NS_URL=null,HIST_URL=null,history=[];
 let cur=new Date();cur.setDate(1);
 let selDay=null;
 const DEFC="#F0B437";
 
-async function loadState(){
-  const access=await ensureToken();
-  const me=await (await fetch("https://api.spotify.com/v1/me",{headers:{Authorization:"Bearer "+access}})).json();
-  $("#who").textContent=(me.display_name||me.id)+"'s workouts";
-  NS_URL="/api/state/u_"+String(me.id).replace(/[^A-Za-z0-9_-]/g,"_").slice(0,48);
-  const r=await fetch(NS_URL,{cache:"no-store"});
-  userState=r.ok?(await r.json()||{}):{};
-  history=(userState.history||[]).slice().sort((a,b)=>b.ts-a.ts);
+/* Your workout history lives on this server; showing it should never depend on a
+   live Spotify call. The account namespace is cached the first time it is known, so
+   the calendar renders immediately even if the token is stale or the network is out.
+   Spotify is then contacted only to confirm the identity and refresh the name. */
+async function loadHistoryFor(ns){
+  NS_URL="/api/state/"+ns;HIST_URL="/api/history/"+ns;
+  const r=await fetch(HIST_URL,{cache:"no-store"});
+  if(!r.ok)throw new Error("history endpoint returned "+r.status);
+  const j=await r.json()||{};
+  history=(j.history||[]).slice().sort((a,b)=>b.ts-a.ts);
+  return history.length;
 }
-async function saveState(){
-  userState.history=history.slice().sort((a,b)=>a.ts-b.ts);
-  try{await fetch(NS_URL,{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify(userState)})}catch(e){toast("Save failed — backend unreachable")}
+async function loadState(){
+  const cached=LSD.get("ns",null);
+  let shown=false;
+  if(cached){                                   // fast path: no Spotify needed
+    try{
+      const n=await loadHistoryFor(cached);
+      $("#who").textContent=`${n} workout${n===1?"":"s"} logged`;
+      renderAll();shown=true;
+    }catch(e){ setBanner("Couldn't read history from the server: "+e.message); }
+  }
+  /* confirm identity in the background; only matters if the account changed */
+  try{
+    const access=await ensureToken();
+    const res=await fetch("https://api.spotify.com/v1/me",{headers:{Authorization:"Bearer "+access}});
+    if(!res.ok)throw new Error("Spotify /me returned "+res.status);
+    const me=await res.json();
+    const ns="u_"+String(me.id).replace(/[^A-Za-z0-9_-]/g,"_").slice(0,48);
+    LSD.set("ns",ns);
+    if(ns!==cached||!shown){
+      const n=await loadHistoryFor(ns);
+      $("#who").textContent=(me.display_name||me.id)+`'s workouts — ${n} logged`;
+      renderAll();
+    }else{
+      $("#who").textContent=(me.display_name||me.id)+`'s workouts — ${history.length} logged`;
+    }
+    setBanner(null);
+  }catch(e){
+    if(shown)setBanner("Showing saved history. Spotify not reachable ("+e.message+") — deleting entries still works.");
+    else{
+      setBanner("Can't identify your account: "+e.message+
+        ' — open the editor page to reconnect, then come back.');
+      throw e;
+    }
+  }
 }
 async function deleteEntry(id){
   if(!confirm("Delete this workout from your history?"))return;
-  history=history.filter(h=>h.id!==id);
-  await saveState();
-  renderAll();
-  toast("Workout deleted");
+  try{
+    const r=await fetch(HIST_URL,{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({op:"delete",id})});
+    if(!r.ok)throw new Error(r.status);
+    const j=await r.json();
+    history=(j.history||[]).slice().sort((a,b)=>b.ts-a.ts);   // trust the server's copy
+    renderAll();
+    toast("Workout deleted");
+  }catch(e){toast("Delete failed — backend unreachable")}
 }
 
 /* ---- calendar ---- */
@@ -237,10 +298,20 @@ $("#tabList").onclick=()=>{$("#tabList").className="on";$("#tabCal").className="
   $("#calView").style.display="none";$("#listView").style.display="";renderList()};
 
 function renderAll(){renderCal();renderList()}
-(async()=>{
+function setBanner(msg){
+  const b=$("#banner");
+  if(!msg){b.style.display="none";b.innerHTML="";return}
+  b.style.display="flex";
+  b.innerHTML=`<span style="flex:1">${esc(msg)}</span><button id="bRetry">Retry</button>`;
+  $("#bRetry").onclick=()=>{setBanner(null);boot()};
+}
+async function boot(){
+  $("#who").textContent="Loading…";
   try{await loadState();renderAll()}
-  catch(e){$("#who").textContent=e.message}
-})();
+  catch(e){ if(!history.length)$("#who").textContent="No history loaded"; }
+}
+boot();
+window.addEventListener("focus",()=>{if(!history.length)boot()});
 </script>
 </body>
 </html>

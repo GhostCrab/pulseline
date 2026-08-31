@@ -98,6 +98,8 @@ body.m-focus #intName{font-size:clamp(24px,7vw,40px)}
 #liveTag{position:absolute;top:max(10px,env(safe-area-inset-top));right:12px;font-family:var(--mono);font-size:10.5px;
   padding:2px 9px;border-radius:12px;background:rgba(0,0,0,.4)}
 #liveTag.live{color:var(--ok)}#liveTag.sim{color:var(--muted)}
+#netTag{position:absolute;top:max(10px,env(safe-area-inset-top));left:12px;font-family:var(--mono);
+  font-size:10.5px;padding:2px 9px;border-radius:12px;background:rgba(0,0,0,.4);color:var(--alert)}
 /* ---- landscape on a phone: solid interval color, name + timer only ---- */
 @media (orientation:landscape) and (max-height:520px){
   /* always full-size focus: solid interval color, white type, no mode switching */
@@ -193,7 +195,8 @@ body.m-focus #intName{font-size:clamp(24px,7vw,40px)}
 </div>
 
 <div id="work">
-  <div id="strip"><canvas id="tl"></canvas><span id="liveTag"></span></div>
+  <div id="strip"><canvas id="tl"></canvas><span id="liveTag"></span>
+    <span id="netTag" style="display:none">reconnecting…</span></div>
   <div id="hud">
     <div id="topInfo">
       <div id="songPair">
@@ -279,13 +282,37 @@ async function ensureToken(){
   await tokenRequest({grant_type:"refresh_token",refresh_token:t.refresh,client_id:AUTH.clientId});
   return AUTH.tok.access;
 }
-async function api(path,opts={}){
-  const access=await ensureToken();
-  const r=await fetch("https://api.spotify.com/v1"+path,{method:opts.method||"GET",
-    headers:{Authorization:"Bearer "+access,...(opts.body?{"Content-Type":"application/json"}:{})},
-    body:opts.body?JSON.stringify(opts.body):undefined});
-  if(r.status===429){await new Promise(res=>setTimeout(res,2000));return api(path,opts)}
+/* Network state, surfaced instead of silently failing. */
+let netDown=false;
+function netOK(){if(netDown){netDown=false;setNetTag(false);toast("Reconnected to Spotify",2500)}}
+function netBad(){if(!netDown){netDown=true;setNetTag(true)}}
+function setNetTag(down){const el=$("#netTag");if(el)el.style.display=down?"":"none"}
+async function api(path,opts={},_depth=0){
+  let access;
+  try{access=await ensureToken()}
+  catch(e){if(e.fatal)throw e;netBad();throw e}
+  let r;
+  try{
+    r=await fetch("https://api.spotify.com/v1"+path,{method:opts.method||"GET",
+      headers:{Authorization:"Bearer "+access,...(opts.body?{"Content-Type":"application/json"}:{})},
+      body:opts.body?JSON.stringify(opts.body):undefined});
+  }catch(e){
+    /* fetch itself threw: offline, radio asleep, DNS. Transient by definition. */
+    netBad();
+    if(_depth<3){await new Promise(x=>setTimeout(x,[500,1500,4000][_depth]));return api(path,opts,_depth+1)}
+    throw new Error("network unreachable");
+  }
+  if(r.status===401&&_depth<2){          // token rejected: force one refresh, then retry
+    try{await ensureToken(true)}catch(e){if(e.fatal)throw e}
+    return api(path,opts,_depth+1);
+  }
+  if((r.status===429||r.status>=500)&&_depth<3){
+    const wait=r.status===429?(+r.headers.get("Retry-After")||2)*1000:[600,1800,4000][_depth];
+    await new Promise(x=>setTimeout(x,wait));
+    return api(path,opts,_depth+1);
+  }
   if(!r.ok)throw new Error("Spotify "+r.status);
+  netOK();
   return r.status===204?null:r.json();
 }
 
@@ -356,7 +383,8 @@ function initSdk(){
   sdkReady=new Promise(resolve=>{
     sdk=new Spotify.Player({name:"Pulseline",getOAuthToken:cb=>ensureToken().then(cb),volume:1});
     sdk.addListener("ready",({device_id})=>{sdkId=device_id;resolve(device_id)});
-    sdk.addListener("not_ready",()=>{sdkId=null});
+    sdk.addListener("not_ready",()=>{sdkId=null;netBad()});
+    sdk.addListener("ready",()=>{netOK()});
     sdk.addListener("initialization_error",({message})=>{toast("Player init failed: "+message,5000);resolve(null)});
     sdk.addListener("authentication_error",({message})=>{toast("Player auth failed — try logging in again",5000);resolve(null)});
     sdk.addListener("account_error",()=>{toast("In-app playback needs Spotify Premium",5000);resolve(null)});
@@ -384,9 +412,20 @@ window.onSpotifyWebPlaybackSDKReady=()=>{if(target==="sdk"&&hasStreamScope())ini
 
 /* ---------- audio cues ---------- */
 let AC=null,master=null;
+/* iOS suspends (or "interrupts") the AudioContext whenever the app is backgrounded,
+   the screen locks, or another app takes the audio session — which includes pausing.
+   Once suspended, every scheduled beep is silently dropped. So the context is revived
+   before each cue and whenever the page becomes visible, not just once at startup. */
+function audioAlive(){
+  if(!AC)return false;
+  if(AC.state==="running")return true;
+  AC.resume().catch(()=>{});
+  return AC.state==="running";
+}
 function ensureAudio(){
+  if(AC&&AC.state==="closed")AC=null,master=null;    // can happen after a long suspend
   AC=AC||new (window.AudioContext||window.webkitAudioContext)();
-  if(AC.state==="suspended")AC.resume();
+  if(AC.state!=="running")AC.resume().catch(()=>{});
   if(!master){ // compressor lets us run hot without clipping — the dings must beat the music
     const comp=AC.createDynamicsCompressor();
     comp.threshold.value=-14;comp.knee.value=8;comp.ratio.value=8;
@@ -405,10 +444,14 @@ function beep(f,t0,dur=.22,vol=1){
     o.connect(gn).connect(master);o.start(t0);o.stop(t0+dur+.06);
   });
 }
-function cueSection(intensity){const n=AC.currentTime;
+function cueSection(intensity){
+  ensureAudio();if(!audioAlive())return;      // resume attempt is async; skip a dead cue
+  const n=AC.currentTime;
   if(intensity==="peak"){beep(740,n);beep(880,n+.2);beep(1175,n+.4,.4)}   // rising: go time
   else{beep(880,n);beep(660,n+.24,.3)}}
-function cueDone(){const n=AC.currentTime;beep(880,n,.25);beep(660,n+.28,.25);beep(440,n+.58,.6)}
+function cueDone(){
+  ensureAudio();if(!audioAlive())return;
+  const n=AC.currentTime;beep(880,n,.25);beep(660,n+.28,.25);beep(440,n+.58,.6)}
 
 /* ---------- display modes: full → minimal → focus ---------- */
 const MODES=["full","min","focus"],MODE_ICON={full:"▤",min:"▬",focus:"◻"};
@@ -432,7 +475,33 @@ $("#modeBtn").onclick=()=>{
 /* ---------- wake lock ---------- */
 let wake=null;
 async function grabWake(){try{wake=await navigator.wakeLock.request("screen")}catch(e){}}
-document.addEventListener("visibilitychange",()=>{if(W&&document.visibilityState==="visible")grabWake()});
+/* Coming back to the app after minutes or hours: the wake lock is gone, the audio
+   context is suspended, the access token may have expired and the SDK player may have
+   dropped its socket. Recover all of it instead of waiting for the next failure. */
+let reviving=false;
+async function reviveSession(){
+  if(reviving)return;reviving=true;
+  try{
+    if(W)grabWake();
+    ensureAudio();
+    try{await ensureToken()}catch(e){ if(e.fatal){toast("Spotify session ended — reopen to log in",6000);} }
+    if(W&&W.live&&target==="sdk"&&sdk){
+      /* the SDK socket dies while backgrounded; reconnect if it is no longer ready */
+      if(!sdkId){try{await sdk.connect()}catch(e){}}
+    }
+    if(W&&W.live&&P.started&&P.playing){
+      try{const st=await api("/me/player");
+        if(st&&!st.is_playing)setPaused(true);     // it stopped while we were away
+      }catch(e){}
+    }
+  }finally{reviving=false}
+}
+document.addEventListener("visibilitychange",()=>{
+  if(document.visibilityState==="visible")reviveSession();
+});
+window.addEventListener("focus",()=>reviveSession());
+window.addEventListener("online",()=>{netOK();reviveSession()});
+window.addEventListener("offline",()=>netBad());
 
 /* ---------- run lifecycle ---------- */
 async function startWorkout(key){
@@ -630,6 +699,8 @@ async function beginPlayback(){          // called from the START tap (a user ge
 }
 function setPaused(pause){
   if(!W)return;
+  if(!pause)ensureAudio();                    // pausing can suspend the audio session
+
   const first=!pause&&!P.started;
   if(!pause)P.started=true;
   P.playing=!pause;
@@ -915,6 +986,7 @@ function draw(){
     const ns="u_"+String(me.id).replace(/[^A-Za-z0-9_-]/g,"_").slice(0,48);
     window.NS_URL="/api/state/"+ns;
     window.HIST_URL="/api/history/"+ns;
+    LSD.set("ns",ns);          // let the calendar load history without a Spotify call
     let st={};
     try{const r=await fetch("/api/state/"+ns,{cache:"no-store"});if(r.ok)st=await r.json()||{}}catch(e){}
     workspaces=st.workspaces||{};

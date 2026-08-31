@@ -88,7 +88,15 @@ Your Spotify app runs in Development Mode, which is fine: your own account works
 - **In-workout screen** (fits the screen exactly, no scrolling): a sliding 2-minute timeline strip up top with the playhead pinned centre; below it, song + artist + song time, the interval name, a **huge time-left countdown**, next-interval preview, and total T+ / time-to-go. The background is a gradient from the dark timeline down into the **current interval's color**, animating as intervals change.
 - **Display modes**: the ▤ button right of PAUSE cycles **full** (timeline + everything) → **minimal** (timeline shrunk to a compact single-line strip) → **focus** (no timeline; interval name and countdown fill the screen). Your choice persists across sessions.
 - **Landscape**: turn the phone sideways and it switches automatically to a landscape focus view — solid interval color filling the screen with just the interval name and a huge countdown, controls tucked down the right edge.
-- **Audio cues** (WebAudio, through your headphones over the music): a two-tone ding at every interval change, a rising three-tone when a **peak** starts, and a finish chime at the end. The screen stays awake via wake lock.
+- **Staying connected**: token refresh is single-flight (concurrent callers share one refresh, so
+  they can't race on Spotify's rotating refresh token), retried with backoff, and done two minutes
+  before expiry. Only an explicit 400/401 from Spotify counts as a dead session; a failure caused
+  by a sleeping radio is retried. API calls retry network errors, 429s and 5xxs with backoff, and
+  a 401 triggers one forced refresh and a retry. Returning to the app — visibility change, window
+  focus, or the network coming back — re-acquires the wake lock, resumes the audio context,
+  revalidates the token, reconnects the in-app player if its socket dropped, and re-syncs against
+  what Spotify is actually playing. A **reconnecting…** badge appears while this is happening.
+- **Audio cues** (WebAudio, through your headphones over the music): a two-tone ding at every interval change, a rising three-tone when a **peak** starts, and a finish chime at the end. The screen stays awake via wake lock. iOS suspends the audio context whenever the app is backgrounded, the screen locks, or the audio session is taken — including on pause — so the context is revived before every cue rather than only at startup; otherwise the dings go silent after the first pause.
 - **Play through**: pick **This app** (Web Playback SDK — the browser itself becomes the Spotify player, so nothing else needs to be open; needs Premium and one extra permission, granted by logging in again once) or **Spotify app** (Spotify Connect — drives whatever device Spotify is active on). In-app mode syncs in real time from playback events instead of polling, so the clock is exact. Keep the screen on in this mode: mobile browsers stop audio when backgrounded, and the app holds a wake lock for exactly that reason. If in-app playback fails for any reason it says so and falls back to the silent simulation, and the Spotify-app mode is always there as a fallback.
 - **Finishing**: when the last interval ends you get a WORKOUT COMPLETE splash, but **the music keeps playing** (cooldown). If you were playing in-app, the splash offers **Continue on Spotify app** — a Spotify Connect handoff that moves playback to your phone's Spotify app (or any other device) at the exact same track and position, so the music survives closing Pulseline. Only an explicit ✕ exit stops the audio. If you pause externally — headphone tap, lock screen — the app notices and pauses with you; resuming externally resumes the app too (instantly in in-app mode, within a few seconds in Spotify-app mode; that watch backs off and stops after 10 minutes so a long break doesn't hammer the API).
 - **Live playback**: starting a (clean, saved) workout tells Spotify to play that playlist from the top on your chosen target — with the Spotify app open on the same phone, that's your headphones. PAUSE pauses both the workout clock and Spotify; the clock re-syncs to real playback every 5 s, so pausing/seeking inside Spotify is reflected too. ✕ ends the workout and pauses the music.
@@ -236,6 +244,54 @@ control, all of which are tuned for speech and would destroy the dynamics being 
 system volume at a consistent level between sessions, since loudness is measured from the signal.
 Analysis needs Premium (it uses the in-browser player) and a desktop OS — virtual audio devices
 don't exist on iOS.
+
+## Running as a service (Debian / Raspberry Pi)
+
+`pulseline.service` is a ready systemd unit. It assumes the app lives in **`/opt/pulseline`** —
+not `/etc`, which is for configuration, and which systemd's `ProtectSystem=full` hardening mounts
+read-only, blocking the server from writing `data/`.
+
+```bash
+# 1. install the app
+sudo mkdir -p /opt/pulseline
+sudo cp -r ./* /opt/pulseline/          # from wherever you copied the files
+
+# 2. a dedicated unprivileged account that owns only its data
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin pulseline
+sudo mkdir -p /opt/pulseline/data
+sudo chown -R root:root /opt/pulseline
+sudo chown -R pulseline:pulseline /opt/pulseline/data
+
+# 3. install and start the unit
+sudo cp /opt/pulseline/pulseline.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now pulseline
+
+# 4. check
+systemctl status pulseline
+journalctl -u pulseline -f
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8888/
+```
+
+The app code is owned by root and read-only to the service; only `data/` is writable, which is
+also the only directory that changes at runtime.
+
+**Binding.** The server listens on `127.0.0.1:8888` by default — correct when `cloudflared` runs
+on the same Pi. To also serve the local network, pass a host or set the environment variable:
+
+```
+ExecStart=/usr/bin/python3 /opt/pulseline/server.py 8888 0.0.0.0
+```
+
+(or `Environment=PULSELINE_HOST=0.0.0.0`). Note there is no authentication in front of the state
+API, so only expose it on a network you trust.
+
+**Updating.** Copy new files into `/opt/pulseline` and `sudo systemctl restart pulseline`. The
+no-cache headers mean browsers pick up changes on the next load.
+
+**Keeping the tunnel up.** If you run `cloudflared` on the same Pi, install it as its own service
+(`sudo cloudflared service install`) so both come back after a reboot; add
+`After=cloudflared.service` to Pulseline's unit only if you want a strict start order.
 
 ## Multi-user
 
