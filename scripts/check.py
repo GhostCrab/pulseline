@@ -5,6 +5,8 @@ Run:  python3 scripts/check.py [--require-eslint]
 
 Checks (each names the docs/DEVELOPING.md section that explains why it exists):
   syntax      every inline <script> and shared .js parses (node --check)
+  combined    each page parses TOGETHER with the shared scripts it loads, so a
+              top-level name leaked by a shared file cannot collide with the page
   scopes      every page's Spotify login requests the identical scope list
               (one stored token serves all pages; spotify-api.md quirk 8)
   versions    ANALYSIS_VERSION == every analysis-core.js?v=N == NEEDS_CORE
@@ -83,6 +85,54 @@ def check_syntax(node):
             r = subprocess.run([node, "--check", js], capture_output=True, text=True, encoding="utf-8")
             if r.returncode:
                 fail("syntax", f"{rel(js)}: {r.stderr.strip()[:300]}")
+
+
+SCRIPT_TAG_RE = re.compile(r"<script(?:\s+src=\"([^\"]+)\")?\s*>(.*?)</script>", re.S)
+
+
+def page_program(page):
+    """The page's scripts in document order, concatenated the way a browser evaluates
+    them: one shared global scope. Remote scripts (the Spotify SDK) are skipped."""
+    src = open(page, encoding="utf-8").read()
+    parts = []
+    for m in SCRIPT_TAG_RE.finditer(src):
+        href, inline = m.group(1), m.group(2)
+        if href:
+            if href.startswith(("http://", "https://", "//")):
+                continue
+            path = os.path.normpath(os.path.join(os.path.dirname(page), href.split("?")[0]))
+            if os.path.exists(path):
+                parts.append(open(path, encoding="utf-8").read())
+        elif inline.strip():
+            parts.append(inline)
+    return "\n;\n".join(parts)
+
+
+def check_combined(node):
+    """Parse each page TOGETHER with the shared scripts it loads.
+
+    check_syntax above parses every script in isolation, which cannot see a collision
+    between them. Classic scripts share one global scope, so a top-level declaration in
+    a shared file takes that name for the whole page: sync-core.js once declared
+    `function spansOf`, workout.html declared `const spansOf`, and the page died with
+    "Identifier 'spansOf' has already been declared" -- while every isolated check
+    passed. ESLint's no-redeclare is per-file too, so it missed it as well.
+
+    Any shared .js that leaks top-level names is a trap for every page that loads it.
+    Wrap it in an IIFE and expose one object, as sync-core.js does."""
+    with tempfile.TemporaryDirectory() as td:
+        for page in PAGES:
+            program = page_program(page)
+            if not program.strip():
+                continue
+            tmp = os.path.join(td, os.path.basename(page) + ".combined.js")
+            open(tmp, "w", encoding="utf-8").write(program)
+            r = subprocess.run([node, "--check", tmp], capture_output=True, text=True,
+                               encoding="utf-8")
+            if r.returncode:
+                err = next((l for l in r.stderr.splitlines() if "Error" in l),
+                           r.stderr.strip()[:200])
+                fail("combined", f"{rel(page)} with its shared scripts: {err}")
 
 
 def check_scopes():
@@ -192,6 +242,7 @@ def main():
         fail("node", "node not found (needed for the syntax check); install Node.js or add it to PATH")
     else:
         check_syntax(node)
+        check_combined(node)
     check_scopes()
     check_versions()
     check_boxchars()

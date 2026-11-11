@@ -199,6 +199,19 @@ can hold it.
 1. **`scripts/check.py`** — *mechanical*. A fixed syntactic pattern: syntax, identical
    login scopes, version markers, undefined identifiers, debug tags. Deterministic, no
    judgement. If a mistake can be described as a pattern, it belongs here, not in prose.
+
+   Note the `combined` check in particular. Every other check parses each script in
+   isolation, and so does ESLint's `no-redeclare` — but classic scripts share one global
+   scope, so a top-level name in a shared `.js` takes that binding for the whole page.
+   `sync-core.js` shipped once declaring `function spansOf`, `workout.html` declared
+   `const spansOf`, and the page died at parse time with *"Identifier 'spansOf' has
+   already been declared"* while every isolated check passed green. `combined` parses
+   each page together with the shared scripts it loads, which is what a browser does.
+
+   **A shared `.js` must not leak top-level names.** Wrap it in an IIFE and expose one
+   object, as `sync-core.js` now does. `analysis-core.js` still leaks its top-level
+   declarations (`loadEssentia`, `METRICS` and the rest); nothing collides today, and
+   the `combined` check is what will say so if anything ever does.
 2. **`CODING_STANDARDS.md`** — *judgement*. Cross-file consistency and "is the fallback
    visible", read by the reviewer and not by the implementer. Only for what no check
    could ever substitute for.
