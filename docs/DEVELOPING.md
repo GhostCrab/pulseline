@@ -16,11 +16,12 @@ Python stdlib only.
 | file | role | notes |
 |---|---|---|
 | `server.py` | static server + JSON state API | ~300 lines, stdlib `http.server` |
-| `index.html` | the editor — playlists, intervals, timeline, run-through | ~2.3k lines, the big one |
-| `workout.html` | phone player | ~1.6k lines, the most-regressed file |
+| `index.html` | the editor — playlists, intervals, timeline, run-through | ~1.9k lines, the big one |
+| `workout.html` | phone player | ~1.3k lines, the most-regressed file |
 | `calendar.html` | history calendar + list | smallest page |
 | `analyze.html` | loopback capture + Essentia driver | owns the capture pipeline |
 | `analysis-core.js` | Essentia wrapper + METRICS catalogue | `ANALYSIS_VERSION = 8` |
+| `sync-core.js` | live sync decisions, shared with the editor | `SYNC_VERSION = 1`, pure, see ADR-0003 |
 
 **The duplication is deliberate.** Each page re-implements its own auth and store layer so a page
 can be opened standalone (the phone loads `workout.html` through a tunnel and nothing else). The
@@ -213,7 +214,8 @@ can hold it.
 | `tests/analysis-core.test.js` | `analysis-core.js`'s pure surface, via a stub `window` | `foldToReference`, `loudnessCurve01`, the `METRICS` catalogue, `metricByKey`, `metricValue`, `metricBounds` — including the documented-vs-observed provenance the *no-invented-numbers rule* rests on |
 | `tests/test_clientlog.py` | `scripts/clientlog.py`, the client-diagnostics reader | the failure signatures it recognises in a real device's log, and that it survives the truncated lines `server.py` is guaranteed to write |
 | `tests/spotify-contract.test.js` | every Spotify path the pages reference, against `docs/spotify/open-api-schema.yaml` | that each path exists, is called with a method the spec defines, needs no scope the login omits, requests no scope nothing needs, and picks up no new deprecated endpoint. Enforces the `CODING_STANDARDS.md` rule that was previously review-only |
-| `tests/workout-guard.test.js` | `guardRun` in `workout.html`, extracted from the real source | that a throw in the run loop is contained, reported once per run, and recorded as a `loopFail` entry; plus structurally, that `tick` and `setPaused` schedule from a `finally` |
+| `tests/sync-core.test.js` | `sync-core.js` — the span match, the snap-or-slew decision, the slew absorber | the tuned constants *Hotspots* 6 warns about, half-RTT compensation, nearest-repeat matching, order-drift reporting, and that absorbing converges without overshoot |
+| `tests/workout-guard.test.js` | `guardRun` and `applySync` in `workout.html`, extracted from the real source | that a throw in the run loop is contained, reported once per run, and recorded as a `loopFail` entry; plus structurally, that `tick` and `setPaused` schedule from a `finally` |
 
 None of these touches a browser, the Web Playback SDK, a Spotify session or the network.
 The playback *sequence* in `workout.html` is still not covered, because no seam reaches
@@ -297,7 +299,10 @@ and the network, and all three report success during the exact failure that matt
    Consolidating these into a shared module is tempting and would be a real improvement — but it
    means one change can break all three pages at once, so do it with a full manual pass over each.
 6. **Clock sync** (`workout.html` and the editor's run-through). Latency compensation and slewing
-   are tuned; changing the constants reintroduces either flicker or drift.
+   are tuned; changing the constants reintroduces either flicker or drift. `workout.html` now gets
+   both from `sync-core.js`, where the constants are covered by `tests/sync-core.test.js` — change
+   them there and the tests say so. **The editor still has its own inline copy**, arithmetically
+   identical; migrating it is the remaining half of ADR-0003 and wants its own pass.
 7. **The editor's timeline draw path** runs on every pan, zoom and hover. Anything added there is
    in the hot loop.
 

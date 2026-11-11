@@ -316,7 +316,8 @@ body.m-focus #intName{font-size:clamp(24px,7vw,40px)}
 </div>
 <div id="toast"></div>
 
-<script src="config.js"></script>
+<script src="config.js?v=4"></script>
+<script src="sync-core.js?v=1"></script>
 <script>
 "use strict";
 const $=s=>document.querySelector(s);
@@ -470,7 +471,11 @@ async function api(path,opts={},_depth=0){
 /* ---------- workout state ---------- */
 let me=null,workspaces={},W=null;   // W = active run {ws,key,spans,secs,total,plTotal,live}
 const P={t:0,playing:false,last:0,prevSec:-1,slew:0,started:false};
-const spansOf=trs=>{let t=0;return trs.map(tr=>{const s={start:t,end:t+tr.durMs/1000,tr};t=s.end;return s})};
+/* Deferred deliberately: dereferencing PLSync at module-evaluation time would throw a
+   ReferenceError before the script finished running, so the boot gate below could never
+   report the missing dependency and the page would just be blank. Shared with the
+   editor (docs/adr/0003). */
+const spansOf=trs=>PLSync.spansOf(trs);
 const secsOf=ss=>{let t=0;return ss.map(s=>{const x={start:t,end:t+s.lenSec,s};t=x.end;return x})};
 const at=(arr,t)=>arr.find(x=>t>=x.start&&t<x.end);
 
@@ -573,15 +578,10 @@ function initSdk(){
       if(!P.started)return;                       // still armed at 0:00, waiting for START
       if(st.paused&&P.playing&&!st.loading){setPaused(true);return}
       if(!st.paused&&!P.playing){setPaused(false);return}   // resumed from headphones/lock screen
-      const uri=st.track_window&&st.track_window.current_track&&st.track_window.current_track.uri;
-      if(!uri)return;
-      let best=-1,bd=1e12;
-      W.spans.forEach((sp,i)=>{if(W.ws.tracks[i].uri===uri){const d=Math.abs(sp.start-P.t);if(d<bd){bd=d;best=i}}});
-      if(best<0)return;
-      const serverT=W.spans[best].start+(st.position||0)/1000;
-      const d=serverT-P.t;
-      if(Math.abs(d)>2.5){P.t=serverT;P.slew=0;P.last=performance.now()}
-      else P.slew=d;
+      /* No rttSec: the SDK pushes this to us, so there is no round trip to compensate. */
+      applySync(PLSync.syncCorrection(W.spans,{
+        uri:st.track_window&&st.track_window.current_track&&st.track_window.current_track.uri,
+        positionSec:(st.position||0)/1000},P.t));
     });
     sdk.connect();
   });
@@ -688,7 +688,11 @@ async function startWorkout(key){
   const spans=spansOf(ws.tracks),secs=secsOf(ws.sections);
   W={ws,key,spans,secs,total:secs[secs.length-1].end,
      plTotal:spans.length?spans[spans.length-1].end:0,
-     live:key!=="demo"&&!ws.dirty};
+     live:key!=="demo"&&!ws.dirty,
+     /* One latch per reason. These three warnings used to share W.orderWarned, which
+        sprang into existence from whichever fired first, so the shuffle warning
+        silenced the order-drift warning for the rest of the run. */
+     warned:{shuffle:false,noMatch:false,order:false}};
   P.t=0;P.prevSec=-1;P.started=false;
   ensureAudio();
   /* iOS requires the audio element to be unlocked inside the tap that started us */
@@ -995,8 +999,8 @@ async function beginPlayback(){          // called from the START tap (a user ge
     setTimeout(async()=>{
       try{
         const st=await api("/me/player");
-        if(st&&st.shuffle_state&&W&&!W.orderWarned){
-          W.orderWarned=true;
+        if(st&&st.shuffle_state&&W&&!W.warned.shuffle){
+          W.warned.shuffle=true;
           toast("Spotify still has shuffle on — turn it off in the app or the timeline won't match",6000);
         }
       }catch(e){}
@@ -1035,6 +1039,23 @@ function setPaused(pause){
 }
 
 /* ---------- clock ---------- */
+/* Apply a live sync decision from sync-core.js, and surface its diagnosis once per
+   reason per run. Both callers - the SDK's player_state_changed and the Spotify-app
+   poll - go through here, so the in-app path now reports order drift and stray tracks
+   too. It previously reported neither: on no match it returned silently, which is why
+   a shuffled in-app workout gave no indication at all. */
+function applySync(dec){
+  if(dec.diagnosis==="noUri")return;          // player blinked between tracks
+  if(dec.diagnosis==="noMatch"){
+    if(W&&!W.warned.noMatch){W.warned.noMatch=true;
+      toast("Spotify is playing a track that isn't in this workout — shuffle may be on",6000)}
+    return;
+  }
+  if(dec.diagnosis==="orderDrift"&&W&&!W.warned.order){W.warned.order=true;
+    toast("Playback order doesn't match the timeline — check that shuffle is off in Spotify",6000)}
+  if(dec.action==="snap"){P.t=dec.to;P.slew=0;P.last=performance.now()}
+  else if(dec.action==="slew")P.slew=dec.by;
+}
 function tick(ts){
   if(!W||!P.playing)return;
   /* The reschedule is in a finally, so no throw in this function can stop the loop.
@@ -1044,7 +1065,7 @@ function tick(ts){
     const dt=Math.min(.25,(ts-P.last)/1000);P.last=ts;
     P.t+=dt;
     /* absorb sync corrections gently (max ±12% clock rate) so the countdown never flickers */
-    if(P.slew){const step=Math.sign(P.slew)*Math.min(Math.abs(P.slew),dt*.12);P.t+=step;P.slew-=step}
+    const step=PLSync.absorbStep(P.slew,dt);P.t+=step;P.slew-=step;
     const secIdx=W.secs.findIndex(x=>P.t>=x.start&&P.t<x.end);
     if(secIdx!==P.prevSec){
       if(secIdx>=0&&P.prevSec>=0)
@@ -1090,21 +1111,10 @@ function startPoll(){
       const rtt=(performance.now()-t0)/1000;
       if(!st||!st.item)return;
       if(!st.is_playing){if(P.playing)setPaused(true);return}
-      const uri=st.item.uri;let best=-1,bd=1e12;
-      W.spans.forEach((sp,i)=>{if(W.ws.tracks[i].uri===uri){const d=Math.abs(sp.start-P.t);if(d<bd){bd=d;best=i}}});
-      if(best<0){
-        /* not a track in this workout at all — shuffle, or a manual skip elsewhere */
-        if(!W.orderWarned){W.orderWarned=true;
-          toast("Spotify is playing a track that isn't in this workout — shuffle may be on",6000)}
-        return;
-      }
-      if(bd>25&&!W.orderWarned){W.orderWarned=true;
-        toast("Playback order doesn't match the timeline — check that shuffle is off in Spotify",6000)}
-      /* latency-compensated server time: progress was snapshotted ~half an RTT ago */
-      const serverT=W.spans[best].start+(st.progress_ms||0)/1000+rtt/2;
-      const d=serverT-P.t;
-      if(Math.abs(d)>2.5){P.t=serverT;P.slew=0;P.last=performance.now()}  // real jump: seek/skip
-      else P.slew=d;                                                       // tiny drift: slew it away
+      /* rttSec is passed because progress_ms was snapshotted ~half an RTT ago
+         (docs/agents/spotify-api.md quirk 5); sync-core applies the half. */
+      applySync(PLSync.syncCorrection(W.spans,{
+        uri:st.item.uri,positionSec:(st.progress_ms||0)/1000,rttSec:rtt},P.t));
     }catch(e){}
   },5000);
 }
@@ -1296,8 +1306,28 @@ function draw(){
 }
 
 /* ---------- boot ---------- */
+/* sync-core.js is this page's only shared-logic dependency (docs/adr/0003). It is
+   checked HERE, at boot, rather than discovered at first use: absorbStep is called
+   from tick(), so a missing or stale copy would otherwise surface as a frozen
+   countdown rather than as an error. Cloudflare caches .js and ignores the server's
+   no-cache, which is what the ?v= marker on the script tag is for; this gate catches
+   the case where the edge served an old body anyway. analyze.html's NEEDS_CORE gate
+   is the precedent. scripts/check.py keeps the three numbers in step. */
+const NEEDS_SYNC=1;
 (async()=>{
   $("#ruShow").textContent=AUTH.redirectUri;
+  if(!window.PLSync){
+    $("#who").innerHTML='<span style="color:var(--alert)">sync-core.js failed to load. '+
+      'Hard-refresh (<b>Ctrl+Shift+R</b>) and restart server.py.</span>';
+    return;
+  }
+  if(PLSync.SYNC_VERSION!==NEEDS_SYNC){
+    $("#who").innerHTML='<span style="color:var(--alert)">Version mismatch: this page '+
+      'needs sync-core.js v'+NEEDS_SYNC+' but loaded v'+PLSync.SYNC_VERSION+'. '+
+      'Copy the current <b>sync-core.js</b>, restart server.py, then hard-refresh '+
+      '(<b>Ctrl+Shift+R</b>).</span>';
+    return;
+  }
   try{
     if(location.search.includes("code=")&&AUTH.clientId){
       const code=new URLSearchParams(location.search).get("code");

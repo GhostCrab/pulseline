@@ -27,7 +27,7 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PAGES = sorted(glob.glob(os.path.join(ROOT, "*.html")) + glob.glob(os.path.join(ROOT, "debug", "*.html")))
-SHARED_JS = [os.path.join(ROOT, f) for f in ("analysis-core.js", "config.js")]
+SHARED_JS = [os.path.join(ROOT, f) for f in ("analysis-core.js", "config.js", "sync-core.js")]
 INLINE_RE = re.compile(r"<script>(.*?)</script>", re.S)
 
 failures = []
@@ -101,21 +101,48 @@ def check_scopes():
                 fail("scopes", f"{page} is missing {' '.join(sorted(union - s))} (all pages share one token)")
 
 
-def check_versions():
-    core = open(os.path.join(ROOT, "analysis-core.js"), encoding="utf-8").read()
-    m = re.search(r"ANALYSIS_VERSION\s*=\s*(\d+)", core)
+def _shared_version(filename, const, marker, needs):
+    """One shared script's three numbers must agree: the version constant in the file,
+    every `<file>?v=N` cache-buster that loads it, and every page's NEEDS_* gate.
+    Cloudflare caches .js and ignores the server's no-cache, so the query string is what
+    forces the edge to re-fetch; the gate is what catches it having served a stale body
+    anyway ("Caching and version skew")."""
+    src = open(os.path.join(ROOT, filename), encoding="utf-8").read()
+    m = re.search(const + r"\s*=\s*(\d+)", src)
     if not m:
-        fail("versions", "ANALYSIS_VERSION not found in analysis-core.js")
+        fail("versions", f"{const} not found in {filename}")
         return
     want = m.group(1)
     for page in PAGES:
+        page_src = open(page, encoding="utf-8").read()
+        for v in re.findall(marker + r"\?v=(\d+)", page_src):
+            if v != want:
+                fail("versions", f"{rel(page)} loads {filename}?v={v}, {const} is {want}")
+        for v in re.findall(needs + r"\s*=\s*(\d+)", page_src):
+            if v != want:
+                fail("versions", f"{rel(page)} {needs}={v}, {const} is {want}")
+        # A shared script loaded with no ?v= at all is the silent case: the edge may
+        # serve an old body indefinitely and nothing says so.
+        if re.search(r'src\s*=\s*"[^"]*' + marker + r'"', page_src):
+            fail("versions", f"{rel(page)} loads {filename} with no ?v= cache-buster")
+
+
+def check_versions():
+    _shared_version("analysis-core.js", "ANALYSIS_VERSION", r"analysis-core\.js", "NEEDS_CORE")
+    _shared_version("sync-core.js", "SYNC_VERSION", r"sync-core\.js", "NEEDS_SYNC")
+
+    # config.js carries no version constant of its own - it is one line - but it is
+    # served through the same edge cache, so every page must agree on its marker.
+    seen = {}
+    for page in PAGES:
         src = open(page, encoding="utf-8").read()
-        for v in re.findall(r"analysis-core\.js\?v=(\d+)", src):
-            if v != want:
-                fail("versions", f"{rel(page)} loads analysis-core.js?v={v}, ANALYSIS_VERSION is {want}")
-        for v in re.findall(r"NEEDS_CORE\s*=\s*(\d+)", src):
-            if v != want:
-                fail("versions", f"{rel(page)} NEEDS_CORE={v}, ANALYSIS_VERSION is {want}")
+        for v in re.findall(r"config\.js\?v=(\d+)", src):
+            seen.setdefault(v, []).append(rel(page))
+        if re.search(r'src\s*=\s*"[^"]*config\.js"', src):
+            fail("versions", f"{rel(page)} loads config.js with no ?v= cache-buster")
+    if len(seen) > 1:
+        detail = "; ".join(f"v={v} in {', '.join(p)}" for v, p in sorted(seen.items()))
+        fail("versions", f"pages disagree on config.js?v=N ({detail})")
 
 
 def check_boxchars():

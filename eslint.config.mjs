@@ -14,6 +14,8 @@ export default [
         ...globals.browser,
         Spotify: "readonly",          // Web Playback SDK
         PLAnalysis: "readonly",       // analysis-core.js
+        PLSync: "readonly",           // sync-core.js
+        module: "readonly",           // sync-core.js's dual export guard
         EssentiaWASM: "readonly",     // vendor/essentia-wasm.web.js
         Essentia: "readonly",         // vendor/essentia.js-core.min.js
       },

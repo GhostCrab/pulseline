@@ -174,6 +174,131 @@ test("setPaused starts the polls from inside its finally block too", () => {
   assert.match(body, /startPausePoll\(\)/, "the pause poll must start on the paused path");
 });
 
+/* ---- applySync: the decision from sync-core, applied and reported ---- */
+
+/* Builds applySync with stub W, P and toast, so the latch behaviour and the clock
+ * effects can be exercised without a browser. */
+function freshApply() {
+  const toasts = [];
+  const W = { warned: { shuffle: false, noMatch: false, order: false } };
+  const P = { t: 100, slew: 0, last: 0 };
+  const factory = new Function("W", "P", "toast", "performance",
+    extractFunction("applySync") + "\nreturn applySync;");
+  return { applySync: factory(W, P, (m) => toasts.push(m), { now: () => 12345 }),
+           W, P, toasts };
+}
+
+test("a noUri decision changes nothing and says nothing", () => {
+  // The SDK reports no track_window between tracks. Telling the user about that would
+  // fire a shuffle warning every time the player blinked.
+  const { applySync, P, toasts } = freshApply();
+  applySync({ action: "none", diagnosis: "noUri" });
+  assert.equal(P.t, 100);
+  assert.equal(P.slew, 0);
+  assert.deepEqual(toasts, []);
+});
+
+test("a noMatch decision warns about shuffle and leaves the clock alone", () => {
+  const { applySync, P, W, toasts } = freshApply();
+  applySync({ action: "none", diagnosis: "noMatch" });
+  assert.equal(P.t, 100, "the clock must not be yanked to a span that does not match");
+  assert.equal(toasts.length, 1);
+  assert.match(toasts[0], /shuffle may be on/);
+  assert.equal(W.warned.noMatch, true);
+});
+
+test("a snap sets the clock, clears the slew and restamps the frame time", () => {
+  const { applySync, P } = freshApply();
+  applySync({ action: "snap", to: 250, diagnosis: null });
+  assert.equal(P.t, 250);
+  assert.equal(P.slew, 0);
+  assert.equal(P.last, 12345, "P.last must be restamped or the next frame's dt is wrong");
+});
+
+test("a slew records the outstanding correction without moving the clock", () => {
+  const { applySync, P } = freshApply();
+  applySync({ action: "slew", by: -1.5, diagnosis: null });
+  assert.equal(P.t, 100);
+  assert.equal(P.slew, -1.5);
+});
+
+test("order drift is reported AND the correction is still applied", () => {
+  const { applySync, P, toasts } = freshApply();
+  applySync({ action: "snap", to: 250, diagnosis: "orderDrift" });
+  assert.equal(P.t, 250, "the warning must not suppress the correction");
+  assert.match(toasts[0], /order doesn't match/);
+});
+
+test("each warning fires once per run", () => {
+  const { applySync, toasts } = freshApply();
+  for (let i = 0; i < 20; i++) applySync({ action: "none", diagnosis: "noMatch" });
+  assert.equal(toasts.length, 1);
+});
+
+test("the warning latches are independent of each other", () => {
+  /* They used to share one W.orderWarned, which sprang into existence from whichever
+   * fired first - so a shuffle warning silenced the order-drift warning for the rest
+   * of the run. */
+  const { applySync, W, toasts } = freshApply();
+  W.warned.shuffle = true;                       // the start-up read-back already fired
+  applySync({ action: "none", diagnosis: "noMatch" });
+  applySync({ action: "slew", by: 0.2, diagnosis: "orderDrift" });
+  assert.equal(toasts.length, 2, "an earlier warning must not silence a different one");
+});
+
+test("applySync tolerates W being cleared mid-flight", () => {
+  // backToSplash() sets W = null, and a poll response can land after that.
+  const factory = new Function("W", "P", "toast", "performance",
+    extractFunction("applySync") + "\nreturn applySync;");
+  const P = { t: 100, slew: 0, last: 0 };
+  const applySync = factory(null, P, () => {}, { now: () => 1 });
+  assert.doesNotThrow(() => applySync({ action: "none", diagnosis: "noMatch" }));
+  assert.doesNotThrow(() => applySync({ action: "snap", to: 5, diagnosis: "orderDrift" }));
+});
+
+/* ---- the boot gate must be reachable ---- */
+
+test("spansOf defers its PLSync lookup to call time", () => {
+  /* The boot gate reports a missing or stale sync-core.js, and it can only do that if
+   * the script finishes evaluating first. `const spansOf=PLSync.spansOf` would throw a
+   * ReferenceError during evaluation, before the gate runs, leaving a blank page and no
+   * message at all - the gate would be dead code in the one case it exists for.
+   *
+   * Tested behaviourally: run the real declaration with no PLSync in scope. */
+  const decl = src.match(/const spansOf=[^\n]*/)[0];
+  const define = new Function(decl + "\nreturn spansOf;");
+  let spansOf;
+  assert.doesNotThrow(() => { spansOf = define(); },
+    "the declaration dereferences PLSync while evaluating");
+  assert.equal(typeof spansOf, "function");
+  // And it really does go through PLSync when called, rather than having been inlined.
+  assert.throws(() => spansOf([]), /PLSync/);
+});
+
+test("no top-level statement dereferences PLSync outside a function", () => {
+  /* The general form of the rule above. Peel every balanced {...} block, which leaves
+   * top-level statements; any PLSync left must belong to an arrow with an expression
+   * body (deferred), not to an immediate dereference. */
+  let code = stripComments(src.slice(src.indexOf('<script>\n"use strict"')));
+  let prev;
+  do {
+    prev = code;
+    code = code.replace(/\{[^{}]*\}/g, " ");
+  } while (code !== prev);
+  const offenders = code.split(";")
+    .filter(stmt => stmt.includes("PLSync") && !stmt.includes("=>"))
+    .map(s => s.trim().slice(0, 80));
+  assert.deepEqual(offenders, [],
+    "PLSync dereferenced during evaluation, so the boot gate cannot run");
+});
+
+test("the boot gate checks both presence and version", () => {
+  const boot = stripComments(src);
+  assert.match(boot, /if\(!window\.PLSync\)/, "no presence check");
+  assert.match(boot, /PLSync\.SYNC_VERSION!==NEEDS_SYNC/, "no version check");
+  assert.match(boot, /const NEEDS_SYNC=\d+;/, "no NEEDS_SYNC constant for check.py to pin");
+});
+
 test("setPaused sets P.playing before anything that can throw", () => {
   // The finally block branches on P.playing, so it must already be correct by then.
   const code = stripComments(extractFunction("setPaused"));
