@@ -19,21 +19,14 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
 
-const CORE = path.join(__dirname, "..", "analysis-core.js");
+const { loadClassicScript } = require("./_page.js");
 
-/* The file is evaluated inside a Function body with `window` as a parameter. That
- * keeps its top-level declarations function-scoped (nothing leaks into the test's
- * globals) while still running in THIS realm - so arrays and objects it builds share
- * the host's intrinsics and deepStrictEqual works on them. A vm context would give
- * them that context's Object.prototype instead, and every structural assertion would
- * fail against an identical-looking literal. */
+/* analysis-core.js is a classic script that assigns window.PLAnalysis - no module.exports
+ * and no export - so it is evaluated whole and the export object taken off the stub
+ * window. See tests/_page.js for why this runs in THIS realm rather than a vm context. */
 function loadCore() {
-  const src = fs.readFileSync(CORE, "utf8");
-  const factory = new Function("window", src + "\n;return window.PLAnalysis;");
-  const api = factory({});
+  const api = loadClassicScript("analysis-core.js").PLAnalysis;
   assert.ok(api, "analysis-core.js must assign window.PLAnalysis");
   return api;
 }

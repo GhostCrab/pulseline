@@ -106,7 +106,7 @@ def migrate_analysis():
 
 
 def history_path(path):
-    """Workout history lives in its OWN file, never inside the state blob — a client that
+    """Workout history lives in its OWN file, never inside the state blob - a client that
     rewrites its state cache can then never clobber logged workouts."""
     p = path.split("?")[0]
     if p.startswith("/api/history/"):
@@ -288,7 +288,7 @@ class Handler(SimpleHTTPRequestHandler):
             return
 
         hp = history_path(self.path)
-        if hp:  # append / delete a single entry — never a wholesale overwrite
+        if hp:  # append / delete a single entry - never a wholesale overwrite
             ns = self.path.split("?")[0][len("/api/history/"):]
             seed_history(hp, os.path.join(DATA_DIR, f"state-{ns}.json"))
             cur = read_json(hp, {"history": []})
@@ -327,7 +327,7 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
 
     def end_headers(self):
-        # Pages and the manifest must revalidate on every launch — this is what lets the
+        # Pages and the manifest must revalidate on every launch - this is what lets the
         # iOS home-screen app pick up new versions just by being closed and reopened.
         p = self.path.split("?")[0]
         # .js included deliberately: a stale cached script is indistinguishable from

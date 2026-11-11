@@ -7,11 +7,14 @@ Checks (each names the docs/DEVELOPING.md section that explains why it exists):
   syntax      every inline <script> and shared .js parses (node --check)
   combined    each page parses TOGETHER with the shared scripts it loads, so a
               top-level name leaked by a shared file cannot collide with the page
+  copies      every api() copy handles a response identically (ADR-0001: a change to
+              one copy is complete only when the others match)
   scopes      every page's Spotify login requests the identical scope list
               (one stored token serves all pages; spotify-api.md quirk 8)
   versions    ANALYSIS_VERSION == every analysis-core.js?v=N == NEEDS_CORE
               ("Caching and version skew")
-  boxchars    no box-drawing characters in .py files ("Operational notes")
+  ascii       .py files stay ASCII: a pasted box-drawing character once produced a
+              SyntaxError, and em-dashes mangle the Windows console ("Operational notes")
   debugtags   no leftover [DEBUG-...] instrumentation
   eslint      no-undef / no-redeclare etc. over the same scripts, if `npm install`
               has been run (required in CI via --require-eslint)
@@ -135,6 +138,57 @@ def check_combined(node):
                 fail("combined", f"{rel(page)} with its shared scripts: {err}")
 
 
+# The marker that opens api()'s response-handling tail. Every page that has an api()
+# wrapper must handle a response identically; the retry ladder above this point is
+# deliberately NOT identical (analyze.html's is shallower, tracked in
+# docs/agents/spotify-api.md's status table), so comparing whole bodies would be red on
+# arrival and nobody would read it.
+API_TAIL_MARKER = "if(r.status===204)return null;"
+
+# Deliberately excluded: debug/sdk-probe.html's api() returns {status, ok, j} instead of
+# the parsed body, because the probe needs the raw status for every call.
+API_TAIL_SKIP = ("debug/sdk-probe.html",)
+
+
+def api_tail(page):
+    """api()'s response handling: from the 204 shortcut to the end of the function.
+    Returns None for a page with no api() wrapper (calendar.html makes one raw fetch)."""
+    src = open(page, encoding="utf-8").read()
+    i = src.find(API_TAIL_MARKER)
+    if i == -1:
+        return None
+    end = src.find("\n}", i)
+    return src[i:end] if end != -1 else src[i:]
+
+
+def check_copies():
+    """Every api() copy handles a response the same way.
+
+    CODING_STANDARDS.md and docs/adr/0001 require a change to one copy to land on the
+    others, and until now only the login SCOPE list was checked mechanically. This is the
+    part that has actually bitten: `return r.status===204?null:r.json()` threw on a 2xx
+    with an empty or non-JSON body, which on iOS read as "Pulseline cannot turn shuffle
+    off" (spotify-api.md quirk 10). Three pages carried that line and all three needed
+    the same fix."""
+    tails = {}
+    for page in PAGES:
+        if rel(page) in API_TAIL_SKIP:
+            continue
+        tail = api_tail(page)
+        if tail is not None:
+            tails[rel(page)] = tail
+    if not tails:
+        fail("copies", f"no api() response handling found in any page ({API_TAIL_MARKER!r})")
+        return
+    if len(set(tails.values())) > 1:
+        groups = {}
+        for page, tail in sorted(tails.items()):
+            groups.setdefault(tail, []).append(page)
+        detail = " vs ".join("/".join(p) for p in groups.values())
+        fail("copies", "api() response handling differs between pages: " + detail
+             + " - a change to one api() is complete only when the others match")
+
+
 def check_scopes():
     found = {}
     for page in PAGES:
@@ -195,11 +249,23 @@ def check_versions():
         fail("versions", f"pages disagree on config.js?v=N ({detail})")
 
 
-def check_boxchars():
+def check_ascii():
+    """Python files stay ASCII. Non-ASCII in a .py has only ever been a bug here, twice:
+    a box-drawing character pasted from a README tree produced `SyntaxError: invalid
+    character` in server.py, and em-dashes in these scripts printed as mojibake on a
+    Windows console - the same cp1252 trap that hid the subprocess crash. The .html
+    pages legitimately carry 24 non-ASCII glyphs, so this is scoped to .py."""
     for py in glob.glob(os.path.join(ROOT, "**", "*.py"), recursive=True):
+        if os.sep + "node_modules" + os.sep in py:
+            continue
         for n, line in enumerate(open(py, encoding="utf-8"), 1):
-            if re.search("[\u2500-\u257f]", line):
-                fail("boxchars", f"{rel(py)}:{n}: box-drawing character (pasted from a README diagram?)")
+            for ch in line:
+                if ord(ch) > 127:
+                    what = ("box-drawing character (pasted from a README diagram?)"
+                            if 0x2500 <= ord(ch) <= 0x257f
+                            else "non-ASCII character U+%04X" % ord(ch))
+                    fail("ascii", "%s:%d: %s" % (rel(py), n, what))
+                    break
 
 
 def check_debugtags():
@@ -243,9 +309,10 @@ def main():
     else:
         check_syntax(node)
         check_combined(node)
+    check_copies()
     check_scopes()
     check_versions()
-    check_boxchars()
+    check_ascii()
     check_debugtags()
     if node:
         check_eslint(node, required)

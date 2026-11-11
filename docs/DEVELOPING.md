@@ -8,10 +8,15 @@ cost an hour or more to find the first time.
 
 ## Shape of the thing
 
-No build step, no framework, no package.json, no dependencies to install. Four HTML pages, each
-with its own `<script>` block holding that page's entire application. The only shared JavaScript
-is `config.js` (one line), `analysis-core.js`, and the vendored Essentia WASM. `server.py` is
-Python stdlib only.
+No build step and no framework: **nothing is compiled, bundled or installed to serve this app.**
+Four HTML pages, each with its own `<script>` block holding that page's entire application. The
+only shared JavaScript is `config.js` (one line), `analysis-core.js`, `sync-core.js`, and the
+vendored Essentia WASM. `server.py` is Python stdlib only.
+
+`package.json` exists and holds **dev-only tooling** - ESLint and a YAML reader for the checks
+and tests. None of it is served or deployed, and the pages reference nothing in
+`node_modules/`. Adding a dev dependency is fine; adding a runtime one is the thing this
+section is about.
 
 | file | role | notes |
 |---|---|---|
@@ -46,6 +51,12 @@ cost is that an auth or storage fix must be applied to every page that has one �
   stub, which exists on PATH, prints "Python was not found" and exits 49. The hook probes
   for an interpreter that actually runs; `npm run check` / `npm test` do not, so call the
   scripts directly on Windows.
+- **The Windows console is cp1252**, and it has cost this project three separate bugs: a
+  `U+2715` in a page crashed `check.py`'s ESLint pass through an unencodable subprocess
+  stdin, em-dashes in these scripts printed as mojibake, and node's `U+2716` failure
+  marker crashed `mutate.py` while it printed a result. Hence the `ascii` check over
+  `*.py`. For a one-off script that prints anything non-ASCII, set
+  `PYTHONIOENCODING=utf-8`.
 - **Client diagnostics**: `workout.html` appends Spotify player events and API failures to
   `data/clientlog-<ns>.jsonl` through `POST /api/log/<ns>`. Read that file first when playback
   misbehaves. `debug/sdk-probe.html` is a standalone in-app-player probe for deeper digging.
@@ -226,6 +237,9 @@ can hold it.
 | `tests/test_server_api.py` | `server.py`'s HTTP interface, over real HTTP on a scratch port | the storage-model invariants: shallow merge, the forced `history` drop, history idempotency and ts ordering, both legacy migrations, the summary projection and its mtime+size cache, `NS_RE` rejection, the 400-before-404 dispatch order, the client-log caps and rotation, `write_json_atomic`'s rolling backups |
 | `tests/analysis-core.test.js` | `analysis-core.js`'s pure surface, via a stub `window` | `foldToReference`, `loudnessCurve01`, the `METRICS` catalogue, `metricByKey`, `metricValue`, `metricBounds` — including the documented-vs-observed provenance the *no-invented-numbers rule* rests on |
 | `tests/test_clientlog.py` | `scripts/clientlog.py`, the client-diagnostics reader | the failure signatures it recognises in a real device's log, and that it survives the truncated lines `server.py` is guaranteed to write |
+| `tests/test_mutate.py` | `scripts/mutate.py`, the mutation tool | that the file is restored byte for byte whatever happens, that a silently failed restore is reported rather than leaving a break in the tree, that a non-unique pattern aborts, and that green is reported as the failure |
+| `tests/page-helpers.test.js` | `tests/_page.js`, the shared extraction helpers every page-level suite is built on | that a function is lifted whole (including past a default parameter and the `async` keyword), that comments are stripped before any structural assertion, and that a `finally` block is located by brace matching rather than by a word match |
+| `tests/sync-core.test.js` | `sync-core.js` | covered above |
 | `tests/spotify-contract.test.js` | every Spotify path the pages reference, against `docs/spotify/open-api-schema.yaml` | that each path exists, is called with a method the spec defines, needs no scope the login omits, requests no scope nothing needs, and picks up no new deprecated endpoint. Enforces the `CODING_STANDARDS.md` rule that was previously review-only |
 | `tests/sync-core.test.js` | `sync-core.js` — the span match, the snap-or-slew decision, the slew absorber | the tuned constants *Hotspots* 6 warns about, half-RTT compensation, nearest-repeat matching, order-drift reporting, and that absorbing converges without overshoot |
 | `tests/workout-guard.test.js` | `guardRun` and `applySync` in `workout.html`, extracted from the real source | that a throw in the run loop is contained, reported once per run, and recorded as a `loopFail` entry; plus structurally, that `tick` and `setPaused` schedule from a `finally` |
@@ -285,10 +299,18 @@ and the network, and all three report success during the exact failure that matt
 - **Test only at an agreed seam.** You cannot test everything here; a test at a seam
   nobody chose lands effort on edge cases instead of the fragile paths. The two seams
   above were picked deliberately. Adding a third is a decision, not a detail.
-- **Watch every new test fail before you trust it.** Force the red by mutating the code
-  the test is meant to protect, confirm the mutation is on disk, then restore. A test you
-  have only ever seen pass proves nothing — and *On reporting work in this repo* records
-  that an unreliable verification tool has already had to be thrown away here once.
+- **Watch every new test fail before you trust it.** `python3 scripts/mutate.py <file>
+  <old> <new>` snapshots the file, insists the pattern is unique, applies the break, runs
+  the suite, restores, and verifies the restore. **It exits non-zero when the mutation is
+  NOT caught**, because a mutation that leaves the suite green means no test can tell the
+  difference. Use `--spec` with a JSON list for a batch, and generate that file rather
+  than hand-writing it — JSON escaping of JavaScript by hand is its own bug source.
+
+  A test you have only ever seen pass proves nothing, and this is not hypothetical: four
+  tests in this repo passed without exercising anything, and `stripComments` going no-op
+  was caught by nothing at all until `tests/page-helpers.test.js` existed. *On reporting
+  work in this repo* records that an unreliable verification tool has already had to be
+  thrown away here once.
 
 ## Hotspots — tread carefully
 

@@ -17,39 +17,11 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
 
-const PAGE = path.join(__dirname, "..", "workout.html");
-const src = fs.readFileSync(PAGE, "utf8");
+const { readPage, extractFunction: extractFrom, stripComments } = require("./_page.js");
 
-/* Extract `function <name>(...){...}` by brace matching, so the test breaks loudly if
- * the function is renamed or removed rather than silently testing nothing. */
-function extractFunction(name) {
-  let start = src.indexOf("function " + name + "(");
-  assert.notEqual(start, -1, `workout.html no longer defines ${name}()`);
-  // Keep an `async` prefix: without it the extracted body has `await` in a sync
-  // function and new Function() throws.
-  if (src.slice(Math.max(0, start - 6), start) === "async ") start -= 6;
-
-  /* Skip the parameter list by matching parens FIRST. Scanning for the next "{" from
-   * the name would find the braces inside a default value - api(path, opts={}, ...)
-   * truncated to `async function api(path,opts={}` and new Function choked on it. */
-  let i = src.indexOf("(", start), parens = 0;
-  for (; i < src.length; i++) {
-    if (src[i] === "(") parens++;
-    else if (src[i] === ")" && --parens === 0) { i++; break; }
-  }
-  i = src.indexOf("{", i);
-  assert.notEqual(i, -1, `could not find the body of ${name}()`);
-
-  let depth = 0;
-  for (; i < src.length; i++) {
-    if (src[i] === "{") depth++;
-    else if (src[i] === "}" && --depth === 0) return src.slice(start, i + 1);
-  }
-  throw new Error(`unbalanced braces while extracting ${name}()`);
-}
+const src = readPage("workout.html");
+const extractFunction = name => extractFrom(src, name);
 
 /* Builds a fresh instance of the helper with its module-level latch, plus spies.
  * `loopFailed` is declared in the page next to guardRun; it is redeclared here so the
@@ -140,28 +112,8 @@ test("a throw with an empty message still reports something", () => {
 
 /* ---- the structural guarantee the helper cannot provide on its own ---- */
 
-/* Comments must be stripped before any structural check. The first version of these
- * tests matched indexOf("finally") against the whole function text and so matched the
- * word "finally" in tick()'s own explanatory comment - which sits near the top, making
- * the assertion unfalsifiable. It passed happily with the reschedule moved out of the
- * block. Strip first, then look for the keyword. */
-function stripComments(text) {
-  return text.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
-}
 
-/* The body of the function's `finally` block, by brace matching - so the assertion is
- * "the reschedule is INSIDE this block", not "it appears later in the file". */
-function finallyBody(fnText) {
-  const code = stripComments(fnText);
-  const kw = code.search(/\bfinally\s*\{/);
-  assert.notEqual(kw, -1, "no finally block");
-  let i = code.indexOf("{", kw), depth = 0, start = i + 1;
-  for (; i < code.length; i++) {
-    if (code[i] === "{") depth++;
-    else if (code[i] === "}" && --depth === 0) return code.slice(start, i);
-  }
-  throw new Error("unbalanced braces in finally block");
-}
+const { finallyBody } = require("./_page.js");
 
 test("tick schedules the next frame from inside its finally block", () => {
   // guardRun protects the calls it wraps; the finally is what protects the loop from a

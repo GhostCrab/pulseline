@@ -11,7 +11,9 @@ python3 server.py                   # local server: open http://127.0.0.1:8888/ 
 python3 scripts/check.py            # all mechanical checks; ESLint included after `npm install`
 python3 scripts/test.py             # behaviour tests (state API, analysis-core, clientlog reader)
 python3 scripts/clientlog.py          # what a real device saw (newest log, latest session)
-bash scripts/hitl-workout.sh        # guided device pass for the playback path
+python3 scripts/mutate.py <file> <old> <new>   # prove a test can fail; green is the failure
+bash scripts/pull-log.sh            # copy the newest client log down from the Pi (read-only)
+bash scripts/hitl-workout.sh        # prerequisites + sequence for a device pass
 git config core.hooksPath .githooks # once per clone: run check.py + test.py on every commit
 ```
 
@@ -26,7 +28,8 @@ Develop and test on the build/test machine against the local server. Production 
 - **`docs/agents/spotify-api.md`**: read before any change that calls Spotify. Endpoints, fields and scopes come from `docs/spotify/open-api-schema.yaml`; grep it.
 - **`CODING_STANDARDS.md`**: the review rules.
 - **`data/clientlog-<ns>.jsonl`**: what real devices reported (Spotify player events, API failures). Read it first when playback misbehaves; `debug/sdk-probe.html` probes the in-app player directly.
-- Auth and `api()` code is duplicated in every page on purpose; a change to one copy applies to all.
+- Auth and `api()` code is duplicated in every page on purpose; a change to one copy applies to all. `scripts/check.py`'s `copies` check enforces the response-handling part.
+- **Edit the pages with the Edit/Write tools, not with `python - <<EOF` or `sed`.** These are 70-96KB files of inline `<script>`, and escaping through a shell heredoc into Python into JavaScript corrupted a file four times in one session.
 
 ## Agent skills
 
