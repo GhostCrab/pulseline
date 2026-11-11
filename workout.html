@@ -999,6 +999,27 @@ async function forceLinearPlayback(deviceId){
   catch(e){ok=false;clog("linearFail",{step:"shuffle",msg:e.message,name:e.name})}
   try{await api("/me/player/repeat?state=off"+q,{method:"PUT"})}
   catch(e){ok=false;clog("linearFail",{step:"repeat",msg:e.message,name:e.name})}
+  /* Settle, verify, and re-apply once - and this is LOAD-BEARING, not a diagnostic.
+     Spotify accepts shuffle?state=false with a 200 and applies it asynchronously, so a
+     device that was just transferred to can still report shuffle_state:true right
+     afterwards. Issue play before it propagates and the queue is already shuffled; by
+     quirk 4, turning shuffle off after play does NOT reorder the queue, so this is the
+     only place a retry can help. Evidence: a run without this read started shuffled,
+     and the next run with it did not (data/clientlog, 2026-11-11).
+     Do not remove it to save the round trip, and do not loop it: START is a user
+     gesture and must stay responsive. */
+  try{
+    const st=await api("/me/player");
+    if(st){
+      const sh={};for(const k of Object.keys(st))if(/shuffle/i.test(k))sh[k]=st[k];
+      clog("shuffleState",{when:"before-play",observed:sh,repeat:st.repeat_state});
+      if(st.shuffle_state){
+        try{await api("/me/player/shuffle?state=false"+q,{method:"PUT"});
+          clog("shuffleRetry",{});}
+        catch(e){ok=false;clog("linearFail",{step:"shuffle-retry",msg:e.message,name:e.name})}
+      }
+    }
+  }catch(e){}
   return ok;
 }
 async function beginPlayback(){          // called from the START tap (a user gesture)
@@ -1016,17 +1037,6 @@ async function beginPlayback(){          // called from the START tap (a user ge
       devId=id;q="?device_id="+encodeURIComponent(id);
     }
     const linear=await forceLinearPlayback(devId);
-    /* DIAGNOSTIC, removable once the shuffle question is settled. Reads the shuffle
-       state BETWEEN the forced-linear sequence and play. quirk 4 says setting shuffle
-       after play does not reorder the queue, so the fix differs completely depending on
-       whether the shuffle call is ignored or play re-enables it - and only a reading
-       taken here can tell those apart. Costs one GET (~200-400ms) on the START gesture;
-       scripts/clientlog.py compares this against the 2.5s post-play reading. */
-    try{
-      const pre=await api("/me/player");
-      if(pre){const sh={};for(const k of Object.keys(pre))if(/shuffle/i.test(k))sh[k]=pre[k];
-        clog("shuffleState",{when:"before-play",observed:sh,repeat:pre.repeat_state});}
-    }catch(e){}
     await api("/me/player/play"+q,{method:"PUT",
       body:{context_uri:"spotify:playlist:"+W.key,offset:{position:0},position_ms:0}});
     /* Verify rather than assume: if the device ignored the shuffle call, say so once

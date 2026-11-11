@@ -176,7 +176,14 @@ def findings(records, bad=()):
     for rec in _of_type(records, "shuffleState"):
         observed = rec.get("observed") or {}
         unknown = {k: v for k, v in observed.items() if k != "shuffle_state"}
-        sev = WARN if (observed.get("shuffle_state") or unknown) else INFO
+        when = rec.get("when") or "unlabelled"
+        # A before-play reading showing shuffle on is not itself a problem: it may just
+        # be propagating. Only the end state earns a warning.
+        # An undocumented field merely being PRESENT is informational; only one that is
+        # actually on, or shuffle itself being on, earns a warning.
+        unknown_on = any(v for v in unknown.values())
+        sev = (INFO if when == "before-play"
+               else WARN if (observed.get("shuffle_state") or unknown_on) else INFO)
         extra = ""
         if unknown:
             on = [k for k, v in unknown.items() if v]
@@ -186,8 +193,9 @@ def findings(records, bad=()):
                      % ", ".join(unknown))
         out.append(Finding(
             sev, "shuffle-state",
-            "Spotify reported %s after the forced-linear sequence.%s"
-            % (json.dumps(observed) if observed else "no shuffle field at all", extra),
+            "Spotify reported %s (%s).%s"
+            % (json.dumps(observed) if observed else "no shuffle field at all",
+               when, extra),
             evidence=[{"t": _when(rec), "observed": observed,
                        "repeat": rec.get("repeat"), "ctx": rec.get("ctx")}]))
 
@@ -201,31 +209,40 @@ def findings(records, bad=()):
     if pre and post:
         pre_on = bool((pre[-1].get("observed") or {}).get("shuffle_state"))
         post_on = bool((post[-1].get("observed") or {}).get("shuffle_state"))
-        if not pre_on and post_on:
+        ev = [{"before": pre[-1].get("observed"), "after": post[-1].get("observed")}]
+        if not post_on:
+            # The END STATE is what matters. Shuffle still reading on before play only
+            # means the setting had not propagated yet, which the settle-and-verify step
+            # in forceLinearPlayback exists to absorb. Judging on the before reading
+            # alone cried wolf on a run that finished correctly.
+            out.append(Finding(
+                INFO, "shuffle-clean",
+                "Shuffle was off once playback started%s."
+                % (" (it still read as on before play, which is the setting "
+                   "propagating)" if pre_on else ""),
+                evidence=ev))
+        elif pre_on:
+            out.append(Finding(
+                HIGH, "shuffle-call-ignored",
+                "Shuffle was on before play AND still on after it, so the call never "
+                "took - most likely the transferred device was not active yet when it "
+                "landed, and the single retry did not catch it either.",
+                rule="spotify-api.md quirk 4", evidence=ev))
+        else:
             out.append(Finding(
                 HIGH, "shuffle-reenabled-by-play",
                 "The forced-linear sequence DID turn shuffle off, and starting playback "
                 "turned it back on. Per quirk 4 this cannot be fixed by re-applying "
                 "shuffle afterwards, because that does not reorder the queue - the "
                 "context_uri start is what reintroduces it.",
-                rule="spotify-api.md quirk 4",
-                evidence=[{"before": pre[-1].get("observed"),
-                           "after": post[-1].get("observed")}]))
-        elif pre_on:
-            out.append(Finding(
-                HIGH, "shuffle-call-ignored",
-                "Shuffle was still on immediately after the shuffle call and before play, "
-                "so Spotify accepted the call and ignored it - most likely the transferred "
-                "device was not active yet when it landed.",
-                rule="spotify-api.md quirk 4",
-                evidence=[{"before": pre[-1].get("observed"),
-                           "after": post[-1].get("observed")}]))
-        else:
-            out.append(Finding(
-                INFO, "shuffle-clean",
-                "Shuffle was off both before and after play.",
-                evidence=[{"before": pre[-1].get("observed"),
-                           "after": post[-1].get("observed")}]))
+                rule="spotify-api.md quirk 4", evidence=ev))
+
+    for rec in _of_type(records, "shuffleRetry"):
+        out.append(Finding(
+            INFO, "shuffle-retried",
+            "Shuffle had not taken by the time it was checked, so it was re-applied "
+            "before play. Expected occasionally; the setting propagates asynchronously.",
+            evidence=[{"t": _when(rec)}]))
 
     # --- a success whose body would not parse ----------------------------------------
     for rec in _of_type(records, "apiBody"):

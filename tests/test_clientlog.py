@@ -236,14 +236,48 @@ class TestDegradeAndFailure(unittest.TestCase):
         self.assertEqual(found[0].severity, clientlog.HIGH)
         self.assertIn("turned it back on", found[0].message)
 
-    def test_shuffle_on_before_play_blames_the_ignored_call(self):
+    def test_shuffle_on_before_AND_after_blames_the_ignored_call(self):
         found = by_code([
             entry("shuffleState", t=1, when="before-play", observed={"shuffle_state": True}),
             entry("shuffleState", t=2, when="after-play", observed={"shuffle_state": True}),
         ], "shuffle-call-ignored")
         self.assertEqual(len(found), 1)
         self.assertEqual(found[0].severity, clientlog.HIGH)
-        self.assertIn("accepted the call and ignored it", found[0].message)
+        self.assertIn("never took", found[0].message)
+
+    def test_REGRESSION_on_before_but_off_after_is_clean_not_a_failure(self):
+        """A real run reported exactly this and the verdict wrongly came back HIGH
+        "accepted the call and ignored it". The END STATE is what matters: shuffle
+        reading on before play just means the setting had not propagated yet, which is
+        what the settle-and-verify step in forceLinearPlayback absorbs. A diagnostic
+        that cries wolf on a successful run is worse than no diagnostic."""
+        records = [
+            entry("shuffleState", t=1, when="before-play", observed={"shuffle_state": True}),
+            entry("shuffleState", t=2, when="after-play", observed={"shuffle_state": False}),
+        ]
+        self.assertEqual(by_code(records, "shuffle-call-ignored"), [])
+        self.assertEqual(by_code(records, "shuffle-reenabled-by-play"), [])
+        clean = by_code(records, "shuffle-clean")
+        self.assertEqual(len(clean), 1)
+        self.assertEqual(clean[0].severity, clientlog.INFO)
+        self.assertIn("propagating", clean[0].message)
+
+    def test_a_present_but_off_undocumented_field_does_not_warn(self):
+        found = by_code([entry("shuffleState", when="after-play",
+                               observed={"shuffle_state": False, "smart_shuffle": False})],
+                        "shuffle-state")
+        self.assertEqual(found[0].severity, clientlog.INFO)
+
+    def test_a_before_play_reading_never_warns_on_its_own(self):
+        found = by_code([entry("shuffleState", when="before-play",
+                               observed={"shuffle_state": True})], "shuffle-state")
+        self.assertEqual(found[0].severity, clientlog.INFO)
+        self.assertIn("before-play", found[0].message)
+
+    def test_a_retry_is_recorded(self):
+        found = by_code([entry("shuffleRetry")], "shuffle-retried")
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].severity, clientlog.INFO)
 
     def test_shuffle_off_throughout_is_clean(self):
         found = by_code([

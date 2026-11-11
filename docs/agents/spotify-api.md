@@ -58,9 +58,21 @@ Issue numbers refer to GitHub issues on GhostCrab/pulseline (label `spotify-api`
    start shuffled, and every interval alignment on the timeline is then silently wrong.
    `forceLinearPlayback()` in `workout.html` handles this.
 4. **Order of operations matters**: activate device (`PUT /me/player {device_ids, play:false}`) →
-   `shuffle?state=false` → `repeat?state=off` → **then** `/me/player/play`. Setting shuffle after
-   play does not retroactively reorder the queue. A 2.5 s read-back of `shuffle_state` warns once
-   (`W.orderWarned`) if it didn't take.
+   `shuffle?state=false` → `repeat?state=off` → **verify** → **then** `/me/player/play`. Setting
+   shuffle after play does not retroactively reorder the queue.
+
+   **`shuffle?state=false` is applied asynchronously.** It answers `200`, and a device that was
+   just transferred to can still report `shuffle_state: true` immediately afterwards. Issue `play`
+   before it propagates and the queue is already shuffled — and because of the line above, there
+   is then no way to recover without restarting playback. So `forceLinearPlayback()` reads
+   `/me/player` after the two PUTs, re-applies `shuffle?state=false` once if it has not taken,
+   and only then returns. That read is **load-bearing, not instrumentation**: a run without it
+   started shuffled and the next run with it did not (`data/clientlog`, 2026-11-11). Don't delete
+   it to save the round trip. Two readings, tagged `before-play` and `after-play`, are logged;
+   `scripts/clientlog.py` compares them and attributes a failure to the right step.
+
+   Judge the outcome on the **after-play** reading. A `before-play` reading showing shuffle on
+   only means the setting is still propagating.
 5. **`progress_ms` is stale by one round trip.** Compensate with `+rtt/2`, then *slew* the local
    clock toward the truth (±12 %) rather than snapping; snap only on >2.5 s drift. Snapping
    produced a visible flicker every 5 s.
@@ -76,6 +88,16 @@ Issue numbers refer to GitHub issues on GhostCrab/pulseline (label `spotify-api`
    `authentication_error: Invalid token scopes`, and `workout.html` then silently switched itself
    to Spotify-app mode: badge `● LIVE`, play sent to some other device, no sound and no error.
    Keep the scope lists identical, and never downgrade the target silently.
+10. **Player commands answer `200` with a short non-JSON body.** `PUT /me/player/shuffle` and
+    `/repeat` are documented to return `204`, and often do — but they also return `200` carrying a
+    bare 27-character base62 token, e.g. `_4IVwfFekPDA0tRbWocW653gz1A`, `psQSx9c2r16A4vbq1mEZfS5u6lg`
+    (measured on iOS 18.7 Safari, 2026-11-11; what the token means is not documented and is not
+    guessed at here). `r.json()` on that throws, and on WebKit the message is `JSON Parse error:
+    Unexpected identifier "..."` — or, for an empty body, `The string did not match the expected
+    pattern.` Both read as a failure to set shuffle when they are nothing of the kind. **A 2xx is a
+    success; the body is informational.** `api()` parses when it can, records the first 120 chars
+    as an `apiBody` client-log entry when it cannot, and returns `null` either way.
+
 9. **In-app audio failure is reported only through SDK events.** `PUT /me/player/play` returns
    204 and the server says `is_playing:true` even when the in-browser player produces nothing.
    `playback_error` (repeated, while the SDK skips through the playlist), `authentication_error`
