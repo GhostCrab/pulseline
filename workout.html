@@ -357,6 +357,26 @@ function clogFlush(){
   }catch(e){}
 }
 addEventListener("pagehide",clogFlush);
+
+/* ---------- containment for the run loop ----------
+   Under "use strict", moving or deleting a block orphans an identifier it defined and
+   the resulting ReferenceError aborts the rest of the function (docs/DEVELOPING.md,
+   Hotspots 2). In tick() that used to stop the run-through dead: frozen countdown,
+   button still reading PAUSE, nothing shown anywhere. The loop now survives it.
+   Reported ONCE per label per run, because tick() runs ~60 times a second. */
+let loopFailed=null;
+function guardRun(label,fn){
+  try{fn();return true}
+  catch(e){
+    const msg=(e&&e.message)||String(e);
+    if(loopFailed!==label){
+      loopFailed=label;
+      clog("loopFail",{label,msg});
+      toast(label+" stopped working ("+msg+") - the workout is still running",8000);
+    }
+    return false;
+  }
+}
 const b64url=b=>btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
 async function tokenRequest(body){
   const r=await fetch("https://accounts.spotify.com/api/token",{method:"POST",
@@ -680,6 +700,7 @@ async function startWorkout(key){
   /* Nothing plays yet. Silence until START — the music and the clock begin together.
      We only warm up the SDK device here so START has no wait. */
   if(W.live&&target==="sdk")initSdk();
+  loopFailed=null;                    // a new run may report a display failure again
   P.playing=false;P.started=false;
   $("#pauseBtn").textContent="START";
   $("#pauseBtn").classList.add("paused");
@@ -992,37 +1013,54 @@ async function beginPlayback(){          // called from the START tap (a user ge
 }
 function setPaused(pause){
   if(!W)return;
-  if(!pause)ensureAudio();                    // pausing can suspend the audio session
-
+  /* State first, and before anything that can throw: this function is the junction every
+     path runs through, and a throw below used to leave the button reading PAUSE with
+     nothing counting. The scheduling block is in a finally for the same reason. */
   const first=!pause&&!P.started;
   if(!pause)P.started=true;
   P.playing=!pause;
-  $("#pauseBtn").textContent=pause?(P.started?"RESUME":"START"):"PAUSE";
-  $("#pauseBtn").classList.toggle("paused",pause);
-  if(W.live){
-    if(first)beginPlayback();                                  // music + clock start together
-    else if(target==="sdk"&&sdk)sdk[pause?"pause":"resume"]().catch(()=>{});
-    else api("/me/player/"+(pause?"pause":"play"),{method:"PUT"}).catch(()=>{});
+  try{
+    if(!pause)guardRun("The interval ding",()=>ensureAudio());  // pausing can suspend the audio session
+    $("#pauseBtn").textContent=pause?(P.started?"RESUME":"START"):"PAUSE";
+    $("#pauseBtn").classList.toggle("paused",pause);
+    if(W.live){
+      if(first)beginPlayback();                                  // music + clock start together
+      else if(target==="sdk"&&sdk)sdk[pause?"pause":"resume"]().catch(()=>{});
+      else api("/me/player/"+(pause?"pause":"play"),{method:"PUT"}).catch(()=>{});
+    }
+  }finally{
+    if(P.playing){P.last=performance.now();requestAnimationFrame(tick);startPoll();stopPausePoll()}
+    else{clearInterval(pollH);pollH=null;startPausePoll()}
   }
-  if(P.playing){P.last=performance.now();requestAnimationFrame(tick);startPoll();stopPausePoll()}
-  else{clearInterval(pollH);pollH=null;startPausePoll()}
 }
 
 /* ---------- clock ---------- */
 function tick(ts){
   if(!W||!P.playing)return;
-  const dt=Math.min(.25,(ts-P.last)/1000);P.last=ts;
-  P.t+=dt;
-  /* absorb sync corrections gently (max ±12% clock rate) so the countdown never flickers */
-  if(P.slew){const step=Math.sign(P.slew)*Math.min(Math.abs(P.slew),dt*.12);P.t+=step;P.slew-=step}
-  const secIdx=W.secs.findIndex(x=>P.t>=x.start&&P.t<x.end);
-  if(secIdx!==P.prevSec){
-    if(secIdx>=0&&P.prevSec>=0)cueSection(W.secs[secIdx].s.intensity);   // interval boundary ding
-    P.prevSec=secIdx;
+  /* The reschedule is in a finally, so no throw in this function can stop the loop.
+     The cue and the redraw are additionally wrapped in guardRun so the user is TOLD
+     rather than left watching a frozen countdown. See Hotspots 2. */
+  try{
+    const dt=Math.min(.25,(ts-P.last)/1000);P.last=ts;
+    P.t+=dt;
+    /* absorb sync corrections gently (max ±12% clock rate) so the countdown never flickers */
+    if(P.slew){const step=Math.sign(P.slew)*Math.min(Math.abs(P.slew),dt*.12);P.t+=step;P.slew-=step}
+    const secIdx=W.secs.findIndex(x=>P.t>=x.start&&P.t<x.end);
+    if(secIdx!==P.prevSec){
+      if(secIdx>=0&&P.prevSec>=0)
+        guardRun("The interval ding",()=>cueSection(W.secs[secIdx].s.intensity));
+      P.prevSec=secIdx;
+    }
+    if(P.t>=W.total){
+      P.t=W.total;
+      guardRun("The timeline",()=>{draw();updateHud()});
+      endWorkout(true);                 // must run even if the final redraw threw
+      return;
+    }
+    guardRun("The timeline",()=>{redrawIfResized();updateHud()});
+  }finally{
+    if(W&&P.playing&&P.t<W.total)requestAnimationFrame(tick);
   }
-  if(P.t>=W.total){P.t=W.total;draw();updateHud();endWorkout(true);return}
-  drawSafe();updateHud();
-  requestAnimationFrame(tick);
 }
 let pausePollH=null,pausePollStart=0;
 function startPausePoll(){          // watch for an external resume (headphone tap, lock screen)
@@ -1147,7 +1185,8 @@ function sizeCanvas(){
   cvs.width=Math.round(CW*dpr);cvs.height=Math.round(CH*dpr);
   ctx.setTransform(dpr,0,0,dpr,0,0);
 }
-function drawSafe(){        // resync if the element box drifted from the backing store
+function redrawIfResized(){ // resync if the element box drifted, then draw.
+                            // NOT error containment - see guardRun for that.
   if(cvs.clientHeight!==CH||cvs.clientWidth!==CW)sizeCanvas();
   draw();
 }
