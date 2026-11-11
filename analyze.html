@@ -458,6 +458,12 @@ async function analyzeTrack(t,idx){
   curIdx=idx;renderActive();
   const sr=AC.sampleRate;
 
+  /* Repeat would loop the track and keep the capture running past its end; shuffle
+     is irrelevant for a single-URI play but is cleared for the same reason. */
+  try{
+    await api(`/me/player/repeat?state=off&device_id=${encodeURIComponent(sdkId)}`,{method:"PUT"});
+    await api(`/me/player/shuffle?state=false&device_id=${encodeURIComponent(sdkId)}`,{method:"PUT"});
+  }catch(e){}
   await api(`/me/player/play?device_id=${encodeURIComponent(sdkId)}`,
     {method:"PUT",body:{uris:[t.uri],position_ms:0}});
   await new Promise(r=>setTimeout(r,900));    // let playback actually start

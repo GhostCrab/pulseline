@@ -126,6 +126,34 @@ body.m-focus #intName{font-size:clamp(24px,7vw,40px)}
     border-color:rgba(255,255,255,.5);background:rgba(0,0,0,.16);color:#fff;writing-mode:vertical-rl}
   #pauseBtn.paused{background:rgba(255,255,255,.92);color:#141414;border-color:transparent}
   #toast{bottom:14px}
+  /* Landscape has width, not height. The card becomes two columns — identity on the
+     left, actions on the right — so everything fits without a scroll. */
+  #doneOv{padding:8px calc(8px + env(safe-area-inset-right)) 8px calc(8px + env(safe-area-inset-left))}
+  #doneBox{width:min(1000px,97vw);max-height:96dvh;overflow:hidden;padding:16px 22px;text-align:left;
+    display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.25fr);gap:0 26px;align-items:center}
+  #doneBox .dHead{grid-column:1;margin:0;align-self:center}
+  #doneOv h2{font-size:clamp(17px,3.4vh,22px);line-height:1.15}
+  #doneOv p{margin-top:5px;font-size:12px}
+  #doneName{font-size:13px}
+  /* A border-left spans the element's full height, so it collided with the Done
+     button below. Use an inset pseudo-element instead: shorter than the column and
+     faded at both ends, so it reads as a separator rather than a hard edge. */
+  #doneBox #handoffWrap{grid-column:2;grid-row:1;position:relative;
+    border-top:0 !important;border-left:0 !important;
+    padding:0 0 0 26px;margin:0}
+  #doneBox #handoffWrap::before{content:"";position:absolute;left:0;top:6px;bottom:6px;width:1px;
+    background:linear-gradient(to bottom,transparent 0,var(--line) 14%,var(--line) 86%,transparent 100%)}
+  .dLabel{margin-bottom:7px}
+  .dToggle{padding:8px 11px;font-size:12.5px}
+  .dToggle .sw{width:38px;height:21px}
+  .dToggle .sw::after{width:15px;height:15px}
+  .dToggle input:checked + .sw::after{transform:translateX(17px)}
+  .dBtns{flex-direction:row;gap:8px;margin-top:8px}
+  .dBtns .cbtn{flex:1;padding:10px;font-size:13px}
+  #handoffList{margin-top:8px;max-height:22dvh;overflow:auto}
+  #handoffList .dv{padding:8px 11px;font-size:12.5px}
+  /* Done spans the full width beneath both columns */
+  #doneBox .dDone{grid-column:1 / -1;margin-top:16px;padding:10px;font-size:13px}
 }
 /* overall-workout progress: only in landscape, hugging the very bottom edge */
 #progBar{display:none}
@@ -156,16 +184,50 @@ body.m-focus #intName{font-size:clamp(24px,7vw,40px)}
   #confirmBox p{flex:1 1 100%;margin:0 0 6px}
   .cbtn{flex:1;width:auto;margin:0;padding:12px}
 }
-#doneOv{position:fixed;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;gap:14px;
-  background:rgba(6,9,14,.88);z-index:50;text-align:center}
-#doneOv h2{font-family:var(--disp);font-size:30px;color:var(--tape)}
-#handoffList{display:flex;flex-direction:column;gap:6px;margin-top:8px}
-#handoffList .dv{display:flex;align-items:center;gap:10px;padding:11px 14px;border:1px solid var(--line);
-  border-radius:10px;font-size:13.5px;text-align:left;background:var(--panel)}
-#handoffList .dv b{flex:1}
+/* Completion dialog — same card language as the confirm sheet. */
+#doneOv{position:fixed;inset:0;display:none;align-items:center;justify-content:center;
+  background:rgba(6,9,14,.86);backdrop-filter:blur(3px);z-index:50;padding:16px}
+#doneBox{background:var(--panel);border:1px solid var(--line);border-radius:16px;
+  padding:20px;width:min(430px,94vw);max-height:94dvh;overflow:auto;text-align:center;
+  box-shadow:0 24px 60px rgba(0,0,0,.5)}
+#doneBox .dHead{margin-bottom:15px}
+#doneOv h2{font-family:var(--disp);font-size:26px;letter-spacing:.06em;color:var(--tape);line-height:1.1}
+#doneOv p{font-family:var(--mono);font-size:12.5px;color:var(--muted);margin-top:7px;line-height:1.5}
+#doneName{font-family:var(--disp);font-size:14px;color:var(--ink);letter-spacing:.03em}
+#doneLog{font-size:12px;color:var(--faint)}
+#doneLog:empty{display:none}
+#doneLog.bad{color:var(--alert)}
+.dLabel{font-family:var(--disp);font-size:10.5px;letter-spacing:.2em;text-transform:uppercase;
+  color:var(--faint);text-align:left;margin-bottom:9px}
+/* Portrait only: the divider is a horizontal rule above the actions. Landscape turns
+   this into a vertical column rule — and because that override lives earlier in the
+   sheet, this rule must not re-apply border-top at equal specificity. */
+#handoffWrap{display:none;padding-top:14px;margin-bottom:14px}
+@media not all and (orientation:landscape), (min-height:521px){
+  #handoffWrap{border-top:1px solid var(--line)}
+}
+.dBtns{display:flex;flex-direction:column;gap:9px;margin-top:11px}
+#doneBox .cbtn{margin:0}
+#doneBox .dDone{background:transparent;border-color:var(--line);color:var(--muted)}
+#doneBox .dDone:hover{color:var(--ink);border-color:var(--tape)}
+/* toggle */
+.dToggle{display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer;
+  background:var(--panel2);border:1px solid var(--line);border-radius:11px;padding:11px 13px;
+  font-size:13.5px;text-align:left}
+.dToggle input{position:absolute;opacity:0;width:0;height:0}
+.dToggle .sw{flex:0 0 auto;width:42px;height:24px;border-radius:999px;background:#2B3542;
+  border:1px solid var(--line);position:relative;transition:background .18s}
+.dToggle .sw::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;
+  background:var(--muted);transition:transform .18s,background .18s}
+.dToggle input:checked + .sw{background:rgba(240,180,55,.28);border-color:var(--tape)}
+.dToggle input:checked + .sw::after{transform:translateX(18px);background:var(--tape)}
+#handoffList{display:flex;flex-direction:column;gap:7px;margin-top:11px}
+#handoffList .dv{display:flex;align-items:center;gap:10px;padding:11px 13px;border:1px solid var(--line);
+  border-radius:10px;font-size:13.5px;text-align:left;background:var(--panel2)}
+#handoffList .dv:hover{border-color:var(--tape)}
+#handoffList .dv b{flex:1;font-weight:600}
 #handoffList .dv small{color:var(--faint)}
-#handoffList .note{color:var(--faint);font-size:12.5px;padding:4px 2px;text-align:center}
-#doneOv p{font-family:var(--mono);color:var(--muted)}
+#handoffList .note{color:var(--faint);font-size:12.5px;padding:2px;text-align:left;line-height:1.5}
 </style>
 </head>
 <body>
@@ -229,13 +291,29 @@ body.m-focus #intName{font-size:clamp(24px,7vw,40px)}
   </div>
 </div>
 
-<div id="doneOv"><h2>WORKOUT COMPLETE</h2><p id="doneStats"></p>
-  <div id="handoffWrap" style="display:none;width:min(420px,92vw)">
-    <button class="cbtn primary" id="handoffBtn">Continue in Spotify</button>
-    <button class="cbtn" id="handoffOther" style="font-size:13px;padding:10px">Choose another device</button>
-    <div id="handoffList"></div>
+<div id="doneOv">
+  <div id="doneBox">
+    <div class="dHead">
+      <h2>WORKOUT COMPLETE</h2>
+      <p id="doneStats"></p>
+      <p id="doneName"></p>
+      <p id="doneLog"></p>
+    </div>
+    <div id="handoffWrap">
+      <div class="dLabel">Keep the music going</div>
+      <label class="dToggle" id="shuffleRow" title="Turn Spotify shuffle on for the playlist when handing off">
+        <span>Shuffle after handoff</span>
+        <input type="checkbox" id="shuffleAfter"><span class="sw"></span>
+      </label>
+      <div class="dBtns">
+        <button class="cbtn primary" id="handoffBtn">Continue in Spotify</button>
+        <button class="cbtn" id="handoffOther">Choose another device</button>
+      </div>
+      <div id="handoffList"></div>
+    </div>
+    <button class="cbtn dDone" id="doneBtn">Done</button>
   </div>
-  <button class="bigbtn primary" id="doneBtn" style="flex:0;padding:14px 40px">Done</button></div>
+</div>
 <div id="toast"></div>
 
 <script src="config.js"></script>
@@ -528,7 +606,11 @@ async function startWorkout(key){
   sizeCanvas();draw();updateHud();fitCount(true);
 }
 async function logWorkout(completed){
-  if(!window.HIST_URL||!W){toast("Workout not logged — no profile connection");return}
+  if(!window.HIST_URL||!W){
+    if(completed){const el=$("#doneLog");el.textContent="Not saved — no profile connection";el.className="bad"}
+    else toast("Workout not logged — no profile connection");
+    return;
+  }
   /* snapshot EVERYTHING synchronously: W is nulled the moment we return to the splash,
      so nothing after an await may touch it */
   const entry={id:Math.random().toString(36).slice(2,10),ts:Date.now(),
@@ -536,12 +618,21 @@ async function logWorkout(completed){
     planned:Math.round(W.total),elapsed:Math.round(Math.min(P.t,W.total)),completed:!!completed};
   /* append-only endpoint: the server merges it into history-<user>.json, so no client
      can overwrite the log by flushing a stale copy of its own state */
+  /* When the completion card is up it already reports the workout, so a toast would
+     only cover it. Report inline there and toast only when there is no card — which
+     is the early-exit path, where the toast is the sole confirmation. A failure is
+     always surfaced, just in whichever place is actually visible. */
+  const inCard=!!completed;
+  const say=(msg,bad)=>{
+    if(inCard){const el=$("#doneLog");el.textContent=msg;el.className=bad?"bad":""}
+    else toast(msg,bad?5000:3200);
+  };
   try{
     const r=await fetch(window.HIST_URL,{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({op:"add",entry})});
     if(!r.ok)throw new Error("save rejected ("+r.status+")");
-    toast("Workout logged ✓ "+fmt(entry.elapsed));
-  }catch(e){toast("Couldn't log workout: "+e.message,5000)}
+    /* silence on success: the card appearing at all is the confirmation */
+  }catch(e){say("Couldn't save to your history: "+e.message,true)}
 }
 function endWorkout(showDone,doLog){
   /* showDone === finished naturally: leave the playlist rolling (cooldown music).
@@ -553,16 +644,29 @@ function endWorkout(showDone,doLog){
   P.playing=false;clearInterval(pollH);pollH=null;stopPausePoll();
   if(doLog===undefined?showDone:doLog)logWorkout(showDone);
   if(wake){wake.release().catch(()=>{});wake=null}
-  if(showDone){cueDone();
-    $("#doneStats").textContent=`${fmt(W.total)} · ${W.ws.sections.length} intervals · ${W.ws.name||""}`
-      +(W.live?" · music still playing":"");
-    /* in-app playback dies when this page closes — offer to toss it to a real device */
-    const canHand=!!(W.live&&target==="sdk");
+  if(showDone){
+    try{cueDone()}catch(e){}
+
+    $("#doneLog").textContent="";$("#doneLog").className="";
+    $("#doneStats").textContent=`${fmt(W.total)} · ${W.ws.sections.length} intervals`;
+    $("#doneName").textContent=W.ws.name||"";
+    /* Offer the handoff whenever music is genuinely playing. In-app playback dies
+       when this page closes, so it is essential there; in Spotify-app mode it is
+       still useful for moving the music to another device (or another room). It is
+       only hidden when there is no live audio to hand off — and then we say so,
+       rather than silently showing a bare dialog. */
+    const canHand=!!W.live;
     handoffCtx=canHand?{}:null;
     $("#handoffWrap").style.display=canHand?"block":"none";
     $("#handoffBtn").style.display="";$("#handoffOther").style.display="";
     $("#handoffBtn").textContent="Continue in Spotify on "+thisDeviceWord;
-    $("#handoffList").innerHTML="";pendingLocal=false;
+    $("#handoffList").innerHTML=canHand?""
+      :'<div class="note">No live playback to hand off — this run was simulated.</div>';
+    $("#shuffleRow").style.display=canHand?"":"none";
+    $("#doneBox").querySelector(".dLabel").style.display=canHand?"":"none";
+    $(".dBtns").style.display=canHand?"":"none";
+    $("#handoffWrap").style.display="block";      // always shown: either options or the reason
+    pendingLocal=false;
     $("#doneOv").style.display="flex";
   }else backToSplash();
 }
@@ -574,6 +678,39 @@ function backToSplash(){
 }
 /* ---- hand playback off to a real Spotify device, keeping the exact position ---- */
 let handoffCtx=null;   // {} snapshot; W may be cleared by the time this is used
+const isMobileUA=/iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+const thisDeviceWord=isMobileUA?"this phone":"this computer";
+/* Spotify device types: "Smartphone", "Tablet", "Computer", "Speaker", ... — match the
+   class of hardware Pulseline is running on, so a handoff stays on the machine in
+   your hand rather than silently jumping to a PC in another room. */
+const looksLikeThisDevice=d=>isMobileUA
+  ?/^(Smartphone|Tablet)$/i.test(d.type||"")
+  :/^Computer$/i.test(d.type||"");
+const realDevices=j=>((j&&j.devices)||[]).filter(d=>d&&d.id&&d.id!==sdkId&&!/^Pulseline/i.test(d.name||""));
+async function findLocalDevice(){
+  try{return realDevices(await api("/me/player/devices")).find(looksLikeThisDevice)||null}
+  catch(e){return null}
+}
+/* If Spotify isn't running on this device it won't appear at all. Open it, then pick
+   it up when it registers — either while we're still foreground, or when you return. */
+let pendingLocal=false;
+async function tryLocalHandoff(auto){
+  const list=$("#handoffList");
+  const d=await findLocalDevice();
+  if(d){pendingLocal=false;await doHandoff(d.id,d.name);return true}
+  if(auto)return false;
+  pendingLocal=true;
+  openSpotifyApp();
+  list.innerHTML=`<div class="note">Opening Spotify on ${thisDeviceWord}... if it doesn't start
+    playing, come back here and tap again.</div>`;
+  let tries=0;
+  const iv=setInterval(async()=>{
+    if(!pendingLocal||++tries>12)return clearInterval(iv);
+    const dd=await findLocalDevice();
+    if(dd){clearInterval(iv);pendingLocal=false;doHandoff(dd.id,dd.name)}
+  },1200);
+  return false;
+}
 function openSpotifyApp(){
   /* deep link: launches the native app (iOS/Android) or the desktop client */
   const a=document.createElement("a");
@@ -590,6 +727,26 @@ function openSpotifyApp(){
    elapsed since that reading plus an allowance for the device to start. The
    allowance is then measured against reality and remembered, so it self-corrects to
    whatever this network and device are really like. */
+/* Shuffle-after-handoff: a per-device preference that persists, because the natural
+   thing after a structured workout is to let the playlist wander. Applied only at the
+   moment of handoff — the workout itself always runs in strict order. */
+const shuffleAfter=()=>!!LSD.get("handoffShuffle",false);
+function initShuffleToggle(){
+  const el=$("#shuffleAfter");
+  el.checked=shuffleAfter();
+  el.addEventListener("change",()=>{
+    LSD.set("handoffShuffle",el.checked);
+    toast(el.checked?"Shuffle will be turned on when you hand off"
+                    :"Shuffle will stay off when you hand off",2600);
+  });
+}
+async function applyShufflePreference(deviceId){
+  const want=shuffleAfter();
+  try{
+    await api(`/me/player/shuffle?state=${want}`+(deviceId?"&device_id="+encodeURIComponent(deviceId):""),
+      {method:"PUT"});
+  }catch(e){ /* some devices reject it; not worth failing the handoff over */ }
+}
 const DEFAULT_START_MS=550;
 function startupAllowance(){
   const v=+LSD.get("handoffLeadMs",DEFAULT_START_MS);
@@ -645,9 +802,11 @@ async function doHandoff(deviceId,name){
       await api("/me/player",{method:"PUT",body:{device_ids:[deviceId],play:true}});
       try{await api("/me/player/play?device_id="+encodeURIComponent(deviceId),{method:"PUT"})}catch(e){}
     }
+    await applyShufflePreference(deviceId);
     openSpotifyApp();
     $("#handoffBtn").style.display="none";$("#handoffOther").style.display="none";
-    list.innerHTML=`<div class="note">Handed off to <b>${esc(name)}</b>${seamless?"":" (position may jump slightly)"}.
+    list.innerHTML=`<div class="note">Handed off to <b>${esc(name)}</b>${seamless?"":" (position may jump slightly)"}${
+        shuffleAfter()?", shuffle on":""}.
       If it didn't start, open Spotify and press play.</div>
       <button class="dv" id="openSp" style="justify-content:center"><b style="flex:0">Open Spotify</b></button>`;
     $("#openSp").onclick=async()=>{
@@ -673,7 +832,11 @@ async function openHandoff(){          // explicit "choose another device"
       <b>${esc(d.name)}</b><small>${esc(d.type||"")}</small></button>`).join("");
   }catch(e){list.innerHTML='<div class="note">Couldn\'t list devices: '+esc(e.message)+'</div>'}
 }
+$("#handoffBtn").onclick=()=>tryLocalHandoff(false);
 $("#handoffOther").onclick=openHandoff;
+document.addEventListener("visibilitychange",()=>{      // returning from the Spotify app
+  if(document.visibilityState==="visible"&&pendingLocal)tryLocalHandoff(true);
+});
 $("#handoffList").addEventListener("click",e=>{
   const b=e.target.closest(".dv[data-id]");
   if(b)doHandoff(b.dataset.id,b.dataset.nm);
@@ -692,19 +855,47 @@ $("#confirmOv").onclick=e=>{if(e.target===$("#confirmOv"))$("#confirmOv").classL
 $("#cfEnd").onclick=()=>{$("#confirmOv").classList.remove("on");endWorkout(false,true)};
 $("#cfDiscard").onclick=()=>{$("#confirmOv").classList.remove("on");endWorkout(false,false)};
 $("#pauseBtn").onclick=()=>setPaused(P.playing);
+/* Shuffle and repeat are account-level modes that persist between sessions: a
+   playlist last played shuffled will start shuffled again, and every interval on the
+   timeline would then be aligned to a track that isn't playing — silently. Both are
+   cleared before the first note. The endpoints need an active device, so the target
+   is activated (without playing) first. Best-effort: a device that rejects them must
+   not stop the workout, and the order check during playback will catch the fallout. */
+async function forceLinearPlayback(deviceId){
+  const q=deviceId?"&device_id="+encodeURIComponent(deviceId):"";
+  try{
+    if(deviceId)await api("/me/player",{method:"PUT",body:{device_ids:[deviceId],play:false}});
+  }catch(e){}
+  let ok=true;
+  try{await api("/me/player/shuffle?state=false"+q,{method:"PUT"})}catch(e){ok=false}
+  try{await api("/me/player/repeat?state=off"+q,{method:"PUT"})}catch(e){ok=false}
+  return ok;
+}
 async function beginPlayback(){          // called from the START tap (a user gesture)
   if(!W.live)return true;
   try{
-    let q="";
+    let q="",devId=null;
     if(target==="sdk"){
       if(sdk){try{await sdk.activateElement()}catch(e){}}   // iOS unlock, inside the gesture
       const id=await Promise.race([initSdk()||Promise.resolve(null),
         new Promise(r=>setTimeout(()=>r(sdkId),6000))]);
       if(!id)throw new Error("in-app player unavailable");
-      q="?device_id="+encodeURIComponent(id);
+      devId=id;q="?device_id="+encodeURIComponent(id);
     }
+    await forceLinearPlayback(devId);
     await api("/me/player/play"+q,{method:"PUT",
       body:{context_uri:"spotify:playlist:"+W.key,offset:{position:0},position_ms:0}});
+    /* Verify rather than assume: if the device ignored the shuffle call, say so once
+       instead of letting the timeline quietly disagree with the audio. */
+    setTimeout(async()=>{
+      try{
+        const st=await api("/me/player");
+        if(st&&st.shuffle_state&&W&&!W.orderWarned){
+          W.orderWarned=true;
+          toast("Spotify still has shuffle on — turn it off in the app or the timeline won't match",6000);
+        }
+      }catch(e){}
+    },2500);
     return true;
   }catch(e){
     W.live=false;$("#liveTag").textContent="SIMULATED";$("#liveTag").className="sim";
@@ -778,7 +969,14 @@ function startPoll(){
       if(!st.is_playing){if(P.playing)setPaused(true);return}
       const uri=st.item.uri;let best=-1,bd=1e12;
       W.spans.forEach((sp,i)=>{if(W.ws.tracks[i].uri===uri){const d=Math.abs(sp.start-P.t);if(d<bd){bd=d;best=i}}});
-      if(best<0)return;
+      if(best<0){
+        /* not a track in this workout at all — shuffle, or a manual skip elsewhere */
+        if(!W.orderWarned){W.orderWarned=true;
+          toast("Spotify is playing a track that isn't in this workout — shuffle may be on",6000)}
+        return;
+      }
+      if(bd>25&&!W.orderWarned){W.orderWarned=true;
+        toast("Playback order doesn't match the timeline — check that shuffle is off in Spotify",6000)}
       /* latency-compensated server time: progress was snapshotted ~half an RTT ago */
       const serverT=W.spans[best].start+(st.progress_ms||0)/1000+rtt/2;
       const d=serverT-P.t;
@@ -1010,6 +1208,7 @@ function draw(){
     if(!Object.keys(workspaces).length){ // account not migrated yet: fall back to legacy shared file
       try{const r=await fetch("/api/state",{cache:"no-store"});if(r.ok){const a=await r.json()||{};workspaces=a.workspaces||{}}}catch(e){}
     }
+    initShuffleToggle();
     $("#targetBox").style.display="block";
     setTarget(hasStreamScope()?target:"connect");
     renderSplash();
