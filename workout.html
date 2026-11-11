@@ -1117,7 +1117,13 @@ function logSyncOnce(kind,extra){
   W.diagLogged=W.diagLogged||{};
   if(W.diagLogged[kind])return;
   W.diagLogged[kind]=true;
-  clog("syncDiag",{diagnosis:kind,...(extra||{})});
+  /* WHERE in the run this happened decides whether it means anything. endWorkout
+     deliberately leaves the music rolling for the cooldown, so once the clock passes
+     W.total Spotify carries on past the playlist and sync correctly sees a track that
+     is not in the workout. That is expected behaviour, not a shuffle problem - without
+     `at`/`total` a noMatch logged at the end looks identical to one at the start. */
+  clog("syncDiag",{diagnosis:kind,at:Math.round(P.t),total:Math.round(W.total),
+    done:P.t>=W.total,...(extra||{})});
 }
 function applySync(dec){
   if(dec.diagnosis==="noUri")return;          // player blinked between tracks

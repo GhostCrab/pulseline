@@ -179,11 +179,11 @@ def findings(records, bad=()):
         when = rec.get("when") or "unlabelled"
         # A before-play reading showing shuffle on is not itself a problem: it may just
         # be propagating. Only the end state earns a warning.
-        # An undocumented field merely being PRESENT is informational; only one that is
-        # actually on, or shuffle itself being on, earns a warning.
+        # These entries are the raw observations. They are always INFO: the per-run
+        # verdicts above are the interpretation and carry the severity. Reporting both
+        # at WARN meant one run produced four warnings describing one situation.
         unknown_on = any(v for v in unknown.values())
-        sev = (INFO if when == "before-play"
-               else WARN if (observed.get("shuffle_state") or unknown_on) else INFO)
+        sev = WARN if unknown_on else INFO
         extra = ""
         if unknown:
             on = [k for k, v in unknown.items() if v]
@@ -199,47 +199,71 @@ def findings(records, bad=()):
             evidence=[{"t": _when(rec), "observed": observed,
                        "repeat": rec.get("repeat"), "ctx": rec.get("ctx")}]))
 
-    # --- which step loses the shuffle setting ---------------------------------------
-    # The whole point of taking two readings. quirk 4: setting shuffle AFTER play does
-    # not reorder the queue, so "the call was ignored" and "play re-enabled it" need
-    # completely different fixes and must not be confused.
-    shuf = _of_type(records, "shuffleState")
-    pre = [r for r in shuf if r.get("when") == "before-play"]
-    post = [r for r in shuf if r.get("when") == "after-play"]
-    if pre and post:
-        pre_on = bool((pre[-1].get("observed") or {}).get("shuffle_state"))
-        post_on = bool((post[-1].get("observed") or {}).get("shuffle_state"))
-        ev = [{"before": pre[-1].get("observed"), "after": post[-1].get("observed")}]
-        if not post_on:
-            # The END STATE is what matters. Shuffle still reading on before play only
-            # means the setting had not propagated yet, which the settle-and-verify step
-            # in forceLinearPlayback exists to absorb. Judging on the before reading
-            # alone cried wolf on a run that finished correctly.
+    # --- per RUN: the shuffle flag across play, and what sync actually observed ----
+    runs = split_runs(records)
+    for n, run in enumerate(runs, 1):
+        label = "" if len(runs) == 1 else " [run %d of %d]" % (n, len(runs))
+        rpre = [r for r in _of_type(run, "shuffleState") if r.get("when") == "before-play"]
+        rpost = [r for r in _of_type(run, "shuffleState") if r.get("when") == "after-play"]
+        rdiag = {r.get("diagnosis"): r for r in _of_type(run, "syncDiag")}
+
+        # What live sync actually observed: the only direct evidence of track order.
+        wrong = [k for k in ("noMatch", "orderDrift") if k in rdiag]
+        during = [k for k in wrong if not rdiag[k].get("done")]
+        after_end = [k for k in wrong if rdiag[k].get("done")]
+
+        if during:
             out.append(Finding(
-                INFO, "shuffle-clean",
-                "Shuffle was off once playback started%s."
-                % (" (it still read as on before play, which is the setting "
-                   "propagating)" if pre_on else ""),
-                evidence=ev))
-        elif pre_on:
+                HIGH, "order-actually-wrong",
+                "Live sync observed %s %s into the workout: the audio really was not "
+                "following the timeline.%s"
+                % (" and ".join(during), _at(rdiag[during[0]]), label),
+                rule="spotify-api.md quirk 4",
+                evidence=[{"diagnosis": k, "at": rdiag[k].get("at"),
+                           "total": rdiag[k].get("total")} for k in during]))
+        elif after_end:
             out.append(Finding(
-                HIGH, "shuffle-call-ignored",
-                "Shuffle was on before play AND still on after it, so the call never "
-                "took - most likely the transferred device was not active yet when it "
-                "landed, and the single retry did not catch it either.",
-                rule="spotify-api.md quirk 4", evidence=ev))
-        else:
-            # Deliberately WARN, not HIGH. shuffle_state is a flag ABOUT the player, not
-            # evidence about the queue: a run was reported where the order warning fired
-            # while the playlist played correctly. The syncDiag findings below are the
-            # direct measurement, and they decide whether this matters.
+                INFO, "played-past-the-end",
+                "Live sync observed %s %s, at or past the end of the workout. That is the "
+                "cooldown: endWorkout leaves the music rolling, so Spotify carries on past "
+                "the playlist and the next track is legitimately not in the workout.%s"
+                % (" and ".join(after_end), _at(rdiag[after_end[0]]), label),
+                evidence=[{"diagnosis": k, "at": rdiag[k].get("at"),
+                           "total": rdiag[k].get("total")} for k in after_end]))
+        elif "inOrder" in rdiag:
+            flag_on = any(bool((r.get("observed") or {}).get("shuffle_state")) for r in rpost)
             out.append(Finding(
-                WARN, "shuffle-reenabled-by-play",
-                "Shuffle read as off before play and on after it, so starting playback "
-                "re-enabled the flag. Per quirk 4 that cannot be undone afterwards. "
-                "Whether the QUEUE is actually out of order is a separate question - see "
-                "the live-sync verdict.",
-                rule="spotify-api.md quirk 4", evidence=ev))
+                INFO, "order-confirmed",
+                "Live sync matched the playing track to the expected span, so the audio "
+                "followed the timeline%s.%s"
+                % (" despite shuffle_state reading as on" if flag_on else "", label),
+                evidence=[{"at": rdiag["inOrder"].get("at"),
+                           "total": rdiag["inOrder"].get("total")}]))
+
+        if rpre and rpost:
+            pre_on = bool((rpre[-1].get("observed") or {}).get("shuffle_state"))
+            post_on = bool((rpost[-1].get("observed") or {}).get("shuffle_state"))
+            ev = [{"before": rpre[-1].get("observed"), "after": rpost[-1].get("observed")}]
+            if not post_on:
+                out.append(Finding(
+                    INFO, "shuffle-clean",
+                    "Shuffle was off once playback started%s.%s"
+                    % (" (it still read as on before play, which is the setting "
+                       "propagating)" if pre_on else "", label), evidence=ev))
+            elif pre_on:
+                out.append(Finding(
+                    WARN, "shuffle-call-ignored",
+                    "Shuffle was on before play AND still on after it, so the call never "
+                    "took - most likely the transferred device was not active yet, and the "
+                    "single retry did not catch it either.%s" % label,
+                    rule="spotify-api.md quirk 4", evidence=ev))
+            else:
+                out.append(Finding(
+                    WARN, "shuffle-reenabled-by-play",
+                    "Shuffle read as off before play and on after it, so starting playback "
+                    "re-enabled the flag. Whether the QUEUE is actually out of order is a "
+                    "separate question - see the live-sync verdict.%s" % label,
+                    rule="spotify-api.md quirk 4", evidence=ev))
 
     for rec in _of_type(records, "shuffleRetry"):
         out.append(Finding(
@@ -247,26 +271,6 @@ def findings(records, bad=()):
             "Shuffle had not taken by the time it was checked, so it was re-applied "
             "before play. Expected occasionally; the setting propagates asynchronously.",
             evidence=[{"t": _when(rec)}]))
-
-    # --- what live sync actually observed: the only direct evidence of track order ---
-    diag = {r.get("diagnosis"): r for r in _of_type(records, "syncDiag")}
-    if "orderDrift" in diag or "noMatch" in diag:
-        kinds = [k for k in ("noMatch", "orderDrift") if k in diag]
-        out.append(Finding(
-            HIGH, "order-actually-wrong",
-            "Live sync observed %s: the audio really was not following the timeline."
-            % " and ".join(kinds),
-            rule="spotify-api.md quirk 4",
-            evidence=[{"diagnosis": k, "t": _when(diag[k])} for k in kinds]))
-    elif "inOrder" in diag:
-        out.append(Finding(
-            INFO, "order-confirmed",
-            "Live sync matched the playing track to the expected span, so the audio "
-            "followed the timeline%s."
-            % (" despite shuffle_state reading as on"
-               if any(bool((r.get("observed") or {}).get("shuffle_state"))
-                      for r in post) else ""),
-            evidence=[{"t": _when(diag["inOrder"])}]))
 
     # --- a success whose body would not parse ----------------------------------------
     for rec in _of_type(records, "apiBody"):
@@ -374,6 +378,25 @@ def split_sessions(records, gap_ms=SESSION_GAP_MS):
     return sessions
 
 
+def split_runs(records):
+    """Group a session's entries into individual workout runs, splitting at each `begin`.
+
+    A session can hold several runs - two workouts eight minutes apart are one session -
+    and merging them attributes one run's verdict to another. Entries before the first
+    `begin` are carry-over from a run whose start is not in this slice, and are kept as
+    their own group so nothing is silently dropped."""
+    ordered = sorted(records, key=_when)
+    groups, current = [], []
+    for rec in ordered:
+        if rec.get("type") == "begin" and current:
+            groups.append(current)
+            current = []
+        current.append(rec)
+    if current:
+        groups.append(current)
+    return groups
+
+
 def _age(seconds):
     if seconds < 90:
         return "%ds ago" % int(seconds)
@@ -382,6 +405,17 @@ def _age(seconds):
     if seconds < 172800:
         return "%.1fh ago" % (seconds / 3600)
     return "%dd ago" % round(seconds / 86400)
+
+
+def _at(rec):
+    """Where in the workout a verdict happened, phrased for a human."""
+    at, total = rec.get("at"), rec.get("total")
+    if not isinstance(at, (int, float)):
+        return "at an unknown point"
+    pos = "%dm%02ds" % (at // 60, at % 60)
+    if isinstance(total, (int, float)) and total:
+        return "%s into a %dm%02ds workout" % (pos, total // 60, total % 60)
+    return pos
 
 
 def _window(records):

@@ -193,10 +193,14 @@ class TestDegradeAndFailure(unittest.TestCase):
                                repeat="off")], "shuffle-state")
         self.assertEqual(found[0].severity, clientlog.INFO)
 
-    def test_shuffle_still_on_after_the_sequence_is_a_warning(self):
-        found = by_code([entry("shuffleState", observed={"shuffle_state": True})],
-                        "shuffle-state")
-        self.assertEqual(found[0].severity, clientlog.WARN)
+    def test_a_raw_reading_is_informational_whatever_shuffle_says(self):
+        """The raw readings are observations; the per-run verdicts are the interpretation
+        and carry the severity. Reporting both at WARN meant a single run produced four
+        warnings describing one situation."""
+        for state in (True, False):
+            found = by_code([entry("shuffleState", observed={"shuffle_state": state})],
+                            "shuffle-state")
+            self.assertEqual(found[0].severity, clientlog.INFO, state)
 
     def test_an_undocumented_shuffle_field_that_is_ON_is_called_out(self):
         """Smart shuffle is a third state the OpenAPI spec does not describe. We do not
@@ -205,6 +209,7 @@ class TestDegradeAndFailure(unittest.TestCase):
         found = by_code([entry("shuffleState",
                                observed={"shuffle_state": False, "smart_shuffle": True})],
                         "shuffle-state")
+        # Still a warning: an undocumented field being ON is genuinely novel.
         self.assertEqual(found[0].severity, clientlog.WARN)
         self.assertIn("smart_shuffle", found[0].message)
         self.assertIn("OpenAPI spec", found[0].message)
@@ -217,7 +222,7 @@ class TestDegradeAndFailure(unittest.TestCase):
         found = by_code([entry("shuffleState",
                                observed={"shuffle_state": True, "smart_shuffle": False})],
                         "shuffle-state")
-        self.assertEqual(found[0].severity, clientlog.WARN)
+        self.assertEqual(found[0].severity, clientlog.INFO)
         self.assertIn("present but off", found[0].message)
         self.assertNotIn("what smart shuffle looks like", found[0].message)
 
@@ -248,7 +253,8 @@ class TestDegradeAndFailure(unittest.TestCase):
             entry("shuffleState", t=2, when="after-play", observed={"shuffle_state": True}),
         ], "shuffle-call-ignored")
         self.assertEqual(len(found), 1)
-        self.assertEqual(found[0].severity, clientlog.HIGH)
+        # WARN, like the other flag verdicts: only a live-sync verdict is an alarm.
+        self.assertEqual(found[0].severity, clientlog.WARN)
         self.assertIn("never took", found[0].message)
 
     def test_REGRESSION_on_before_but_off_after_is_clean_not_a_failure(self):
@@ -321,6 +327,63 @@ class TestDegradeAndFailure(unittest.TestCase):
         records = [entry("begin", target="sdk", streamScope=True)]
         self.assertEqual(by_code(records, "order-confirmed"), [])
         self.assertEqual(by_code(records, "order-actually-wrong"), [])
+
+    def test_a_noMatch_past_the_end_is_the_cooldown_not_a_failure(self):
+        """A real session logged noMatch 7m51s into a 7m50s workout - the workout had
+        finished, endWorkout leaves the music rolling, and Spotify carried on past the
+        playlist. Reporting that as HIGH sent me chasing a shuffle bug that was not
+        there. Where in the run it happened is what decides."""
+        records = [entry("begin", t=1, target="sdk", streamScope=True),
+                   entry("syncDiag", t=2, diagnosis="noMatch", at=471, total=470, done=True)]
+        self.assertEqual(by_code(records, "order-actually-wrong"), [])
+        found = by_code(records, "played-past-the-end")
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].severity, clientlog.INFO)
+        self.assertIn("cooldown", found[0].message)
+        self.assertIn("7m51s into a 7m50s workout", found[0].message)
+
+    def test_a_noMatch_DURING_the_workout_is_still_HIGH(self):
+        records = [entry("begin", t=1, target="sdk", streamScope=True),
+                   entry("syncDiag", t=2, diagnosis="noMatch", at=30, total=470, done=False)]
+        found = by_code(records, "order-actually-wrong")
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].severity, clientlog.HIGH)
+        self.assertIn("0m30s into a 7m50s workout", found[0].message)
+        self.assertEqual(by_code(records, "played-past-the-end"), [])
+
+    def test_verdicts_are_attributed_to_the_run_they_came_from(self):
+        """Two workouts eight minutes apart are one session. Merging them attributed one
+        run's noMatch to the other and suppressed the other run's confirmation."""
+        records = [
+            entry("begin", t=1, target="sdk", streamScope=True),
+            entry("syncDiag", t=2, diagnosis="noMatch", at=471, total=470, done=True),
+            entry("begin", t=3, target="sdk", streamScope=True),
+            entry("syncDiag", t=4, diagnosis="inOrder", at=5, total=470, done=False),
+        ]
+        past = by_code(records, "played-past-the-end")
+        confirmed = by_code(records, "order-confirmed")
+        self.assertEqual(len(past), 1)
+        self.assertEqual(len(confirmed), 1, "run 2's confirmation must not be swallowed")
+        self.assertIn("run 1 of 2", past[0].message)
+        self.assertIn("run 2 of 2", confirmed[0].message)
+
+    def test_a_single_run_is_not_labelled(self):
+        records = [entry("begin", t=1, target="sdk", streamScope=True),
+                   entry("syncDiag", t=2, diagnosis="inOrder", at=5, total=470)]
+        self.assertNotIn("run 1 of", by_code(records, "order-confirmed")[0].message)
+
+    def test_split_runs_divides_on_begin(self):
+        records = [entry("sdk", t=1, ev="ready"),
+                   entry("begin", t=2), entry("syncDiag", t=3, diagnosis="inOrder"),
+                   entry("begin", t=4), entry("syncDiag", t=5, diagnosis="inOrder")]
+        groups = clientlog.split_runs(records)
+        # The leading `ready` is carry-over and keeps its own group rather than vanishing.
+        self.assertEqual([len(g) for g in groups], [1, 2, 2])
+
+    def test_split_runs_orders_before_dividing(self):
+        records = [entry("syncDiag", t=5, diagnosis="inOrder"), entry("begin", t=4),
+                   entry("begin", t=2), entry("syncDiag", t=3, diagnosis="inOrder")]
+        self.assertEqual([len(g) for g in clientlog.split_runs(records)], [2, 2])
 
     def test_a_retry_is_recorded(self):
         found = by_code([entry("shuffleRetry")], "shuffle-retried")

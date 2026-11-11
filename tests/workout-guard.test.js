@@ -396,6 +396,30 @@ test("applySync records the live-sync verdict once per kind", () => {
   assert.deepEqual(logged.map(l => l.data.diagnosis), ["inOrder", "orderDrift"]);
 });
 
+test("a recorded verdict says WHERE in the run it happened", () => {
+  /* Without at/total, a noMatch logged after the workout finished looks identical to
+   * one at the start. endWorkout leaves the music rolling for the cooldown, so Spotify
+   * carries on past the playlist and sync legitimately stops matching - a real session
+   * logged exactly that and it was reported as a failure. */
+  const { applySync, logged, W, P } = freshApply();
+  W.total = 470;
+  P.t = 471;
+  applySync({ action: "none", diagnosis: "noMatch" });
+  const d = logged[0].data;
+  assert.equal(d.at, 471, "the clock position is recorded");
+  assert.equal(d.total, 470, "the workout length is recorded");
+  assert.equal(d.done, true, "past the end is marked as such");
+});
+
+test("a verdict during the workout is not marked done", () => {
+  const { applySync, logged, W, P } = freshApply();
+  W.total = 470;
+  P.t = 30;
+  applySync({ action: "snap", to: 200, diagnosis: "orderDrift" });
+  assert.equal(logged[0].data.done, false);
+  assert.equal(logged[0].data.at, 30);
+});
+
 test("applySync does not record a verdict for a player blink", () => {
   const { applySync, logged } = freshApply();
   applySync({ action: "none", diagnosis: "noUri" });
