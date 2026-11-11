@@ -1,0 +1,12 @@
+{
+  "name": "pulseline-dev",
+  "private": true,
+  "description": "Dev-only tooling. The app itself has no dependencies; nothing here is served or deployed.",
+  "scripts": {
+    "check": "python3 scripts/check.py"
+  },
+  "devDependencies": {
+    "eslint": "9.39.5",
+    "globals": "15.15.0"
+  }
+}

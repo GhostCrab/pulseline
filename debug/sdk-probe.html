@@ -1,0 +1,160 @@
+<!-- Diagnostics: exercises the in-app (Web Playback SDK) path step by step, the way
+     workout.html does, and logs every SDK event and API status. Reuses this browser's
+     Pulseline login (pl_tok); never logs tokens. See docs/DEVELOPING.md. -->
+<title>Pulseline SDK probe</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<style>
+  body{font:14px -apple-system,system-ui,sans-serif;background:#0d1117;color:#e6edf3;margin:0;padding:16px}
+  button{font:inherit;font-size:16px;padding:12px 14px;margin:4px 4px 4px 0;border-radius:10px;border:1px solid #444;background:#1f6feb;color:#fff}
+  button.sec{background:#30363d}
+  label{display:block;margin:8px 0}
+  input[type=text]{width:100%;box-sizing:border-box;font:inherit;padding:8px;background:#161b22;color:#e6edf3;border:1px solid #444;border-radius:8px}
+  #verdict{font-size:18px;font-weight:700;margin:12px 0}
+  .red{color:#ff7b72}.green{color:#3fb950}
+  #log{white-space:pre-wrap;font:11px ui-monospace,Menlo,monospace;background:#161b22;padding:10px;border-radius:8px;
+    max-height:55vh;overflow:auto;-webkit-user-select:text;user-select:text}
+</style>
+<h3>Pulseline SDK probe</h3>
+<p>Uses this browser's existing Pulseline login. Turn the volume up, then tap <b>Run probe</b>. Afterwards tap <b>Copy log</b>; the log is also saved to the server's client log.</p>
+<label>Context to play <input type="text" id="ctx" placeholder="loading your playlists…"></label>
+<label><input type="checkbox" id="cue"> Also start a cue AudioContext first (like the workout's dings)</label>
+<button id="run">Run probe</button><button class="sec" id="stop">Pause</button><button class="sec" id="copy">Copy log</button>
+<div id="verdict"></div>
+<div id="log"></div>
+
+<script src="../config.js"></script>
+<script>
+"use strict";
+const $=s=>document.querySelector(s);
+const T0=performance.now();
+const lines=[];
+function log(...a){
+  const s=`+${((performance.now()-T0)/1000).toFixed(2)}s `+a.map(x=>typeof x==="string"?x:JSON.stringify(x)).join(" ");
+  lines.push(s);$("#log").textContent=lines.join("\n");$("#log").scrollTop=1e9;
+}
+window.addEventListener("error",e=>log("WINDOW ERROR",e.message,e.filename+":"+e.lineno));
+window.addEventListener("unhandledrejection",e=>log("UNHANDLED REJECTION",String(e.reason&&e.reason.message||e.reason)));
+
+/* ---- same device-auth storage as workout.html (pl_ keys); tokens are never logged ---- */
+const LSD={get:(k,d)=>{try{const v=localStorage.getItem("pl_"+k);return v==null?d:JSON.parse(v)}catch(e){return d}},
+           set:(k,v)=>localStorage.setItem("pl_"+k,JSON.stringify(v))};
+const clientId=window.PULSELINE_CLIENT_ID||LSD.get("clientId",null);
+async function ensureToken(){
+  const t=LSD.get("tok",null);if(!t)throw new Error("Not connected: open workout.html and log in first");
+  if(Date.now()<t.exp)return t.access;
+  const r=await fetch("https://accounts.spotify.com/api/token",{method:"POST",
+    headers:{"Content-Type":"application/x-www-form-urlencoded"},
+    body:new URLSearchParams({grant_type:"refresh_token",refresh_token:t.refresh,client_id:clientId})});
+  log("token refresh ->",r.status);
+  if(!r.ok)throw new Error("token refresh failed "+r.status);
+  const j=await r.json();   // write back exactly like workout.html: Spotify rotates the refresh token
+  LSD.set("tok",{access:j.access_token,refresh:j.refresh_token||t.refresh,scope:j.scope||t.scope||"",exp:Date.now()+(j.expires_in-60)*1000});
+  return j.access_token;
+}
+async function api(path,opts={}){
+  const r=await fetch("https://api.spotify.com/v1"+path,{method:opts.method||"GET",
+    headers:{Authorization:"Bearer "+await ensureToken(),...(opts.body?{"Content-Type":"application/json"}:{})},
+    body:opts.body?JSON.stringify(opts.body):undefined});
+  const tx=r.status===204?"":await r.text();
+  let j=null;try{j=tx?JSON.parse(tx):null}catch(e){}
+  if(!opts.quiet)log(`${opts.method||"GET"} ${path.split("?")[0]} -> ${r.status}`,
+    !r.ok?(j&&j.error?j.error:tx.slice(0,200)):"");
+  return {status:r.status,ok:r.ok,j};
+}
+function saveToServer(){
+  const ns=LSD.get("ns",null);if(!ns)return;
+  fetch("../api/log/"+encodeURIComponent(ns),{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({entries:[{t:Date.now(),page:"sdk-probe",type:"probe",log:lines.join("\n").slice(-1800)}]})}).catch(()=>{});
+}
+
+/* ---- environment ---- */
+const tok=LSD.get("tok",null);
+log("UA",navigator.userAgent);
+log("standalone(home-screen)",!!navigator.standalone,"| display-mode standalone",matchMedia("(display-mode: standalone)").matches);
+log("token present",!!tok,"| expired",tok?Date.now()>=tok.exp:null,"| scopes",tok?tok.scope:null);
+log("EME",typeof navigator.requestMediaKeySystemAccess,"| WebKitMediaKeys",typeof window.WebKitMediaKeys,"| MediaSource",typeof window.MediaSource,"| ManagedMediaSource",typeof window.ManagedMediaSource);
+log("audioSession",navigator.audioSession?navigator.audioSession.type:"n/a");
+
+(async()=>{
+  try{
+    const r=await api("/me/playlists?limit=20",{quiet:true});
+    const me=await api("/me",{quiet:true});
+    log("/me ->",me.status,"product:",me.j&&me.j.product);
+    const own=((r.j&&r.j.items)||[]).filter(p=>p&&me.j&&p.owner&&p.owner.id===me.j.id);
+    if(own[0]){$("#ctx").value=own[0].uri;log("default context: an owned playlist,",own.length,"owned found")}
+    else log("no owned playlists found; paste a spotify:playlist:… URI");
+  }catch(e){log("preload failed:",e.message)}
+})();
+
+/* ---- SDK ---- */
+let player=null,readyResolve=null;
+const ready=new Promise(r=>readyResolve=r);
+let sdkLoaded=false;
+window.onSpotifyWebPlaybackSDKReady=()=>{sdkLoaded=true;log("SDK script loaded")};
+const s=document.createElement("script");s.src="https://sdk.scdn.co/spotify-player.js";
+s.onerror=()=>log("SDK script FAILED to load");document.head.appendChild(s);
+
+function makePlayer(){
+  player=new Spotify.Player({name:"Pulseline probe",getOAuthToken:cb=>ensureToken().then(cb,e=>log("getOAuthToken error",e.message)),volume:1});
+  player.addListener("ready",({device_id})=>{log("EVENT ready");readyResolve(device_id)});
+  player.addListener("not_ready",()=>log("EVENT not_ready"));
+  ["initialization_error","authentication_error","account_error","playback_error"].forEach(ev=>
+    player.addListener(ev,e=>log("EVENT "+ev,e&&e.message)));
+  player.addListener("autoplay_failed",()=>log("EVENT autoplay_failed"));
+  player.addListener("player_state_changed",st=>{
+    if(!st)return log("EVENT player_state_changed null");
+    const ct=st.track_window&&st.track_window.current_track;
+    log("EVENT state",{paused:st.paused,loading:st.loading,pos:st.position,dur:st.duration,track:ct&&ct.uri});
+  });
+}
+
+let AC=null;
+$("#run").onclick=async()=>{
+  $("#verdict").textContent="running…";$("#verdict").className="";
+  log("---- RUN, cue context:",$("#cue").checked);
+  if(!sdkLoaded||!window.Spotify){log("SDK not loaded yet");$("#verdict").textContent="SDK not loaded, wait and retry";return}
+  /* inside the tap, before any await: same iOS unlock the workout relies on */
+  if($("#cue").checked){
+    AC=AC||new (window.AudioContext||window.webkitAudioContext)();AC.resume();
+    const o=AC.createOscillator(),g=AC.createGain();g.gain.value=.2;o.connect(g).connect(AC.destination);o.start();o.stop(AC.currentTime+.15);
+    log("cue AudioContext state",AC.state);
+  }
+  const first=!player;
+  if(first)makePlayer();
+  try{await player.activateElement();log("activateElement resolved")}catch(e){log("activateElement threw",e.message)}
+  if(first){const ok=await player.connect();log("connect() ->",ok)}
+  const id=await Promise.race([ready,new Promise(r=>setTimeout(()=>r(null),10000))]);
+  if(!id){$("#verdict").textContent="RED: player never became ready (10 s)";$("#verdict").className="red";saveToServer();return}
+  await api("/me/player",{method:"PUT",body:{device_ids:[id],play:false}});
+  const q="&device_id="+encodeURIComponent(id);
+  await api("/me/player/shuffle?state=false"+q,{method:"PUT"});
+  await api("/me/player/repeat?state=off"+q,{method:"PUT"});
+  const ctx=$("#ctx").value.trim();
+  await api("/me/player/play?device_id="+encodeURIComponent(id),{method:"PUT",
+    body:ctx?{context_uri:ctx,offset:{position:0},position_ms:0}:{}});
+  let pos0=null,pos1=null;
+  for(let i=1;i<=10;i++){
+    await new Promise(r=>setTimeout(r,1000));
+    const st=await player.getCurrentState();
+    if(st){if(pos0==null)pos0=st.position;pos1=st.position}
+    log(`t${i}`,"sdk",st?{paused:st.paused,loading:st.loading,pos:st.position}:null,"vol",await player.getVolume());
+    if(i===3||i===9){const p=await api("/me/player",{quiet:true});
+      log("server /me/player",p.j?{is_playing:p.j.is_playing,progress:p.j.progress_ms,onProbe:p.j.device&&p.j.device.id===id,
+        devType:p.j.device&&p.j.device.type,devVol:p.j.device&&p.j.device.volume_percent}:p.status)}
+  }
+  /* The verdict rests on the SDK's own error events. A DOM media-element check can't see
+     an Audio element the SDK never attaches, so it is deliberately not used. */
+  const adv=pos0!=null&&pos1-pos0>3000;
+  const errs=lines.filter(l=>/EVENT (authentication_error|account_error|playback_error|initialization_error|autoplay_failed)/.test(l)).length;
+  const v=errs?`RED: ${errs} SDK error event(s)`:(adv?"GREEN: no SDK errors, position advancing":"RED: position not advancing");
+  log("VERDICT",v);
+  $("#verdict").textContent=v+" — did you hear audio?";$("#verdict").className=v.startsWith("GREEN")?"green":"red";
+  saveToServer();
+};
+$("#stop").onclick=async()=>{if(player){await player.pause().catch(()=>{});log("paused")}};
+$("#copy").onclick=async()=>{
+  try{await navigator.clipboard.writeText(lines.join("\n"));log("(copied)")}
+  catch(e){const r=document.createRange();r.selectNodeContents($("#log"));getSelection().removeAllRanges();getSelection().addRange(r);
+    log("clipboard blocked: log is selected, use Copy from the menu")}
+};
+</script>

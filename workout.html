@@ -336,11 +336,33 @@ const CFG_ID=(typeof window.PULSELINE_CLIENT_ID==="string"&&/^[0-9a-f]{32}$/i.te
 const AUTH={get clientId(){return CFG_ID||LSD.get("clientId",null)},set clientId(v){LSD.set("clientId",v)},
   get tok(){return LSD.get("tok",null)},set tok(v){LSD.set("tok",v)},
   redirectUri:location.origin+location.pathname};
+/* ---------- client diagnostics -> data/clientlog-<ns>.jsonl (docs/DEVELOPING.md) ----------
+   Batched, fire-and-forget, never blocks the workout and never includes tokens. Entries
+   wait in memory until the account namespace is known. */
+const CLOG={q:[],t:null};
+function clog(type,data){
+  try{
+    CLOG.q.push({t:Date.now(),page:"workout",type,...(data||{})});
+    if(CLOG.q.length>200)CLOG.q.splice(0,CLOG.q.length-200);
+    clearTimeout(CLOG.t);CLOG.t=setTimeout(clogFlush,1500);
+  }catch(e){}
+}
+function clogFlush(){
+  try{
+    const ns=LSD.get("ns",null);if(!ns||!CLOG.q.length)return;
+    const entries=CLOG.q.splice(0,50);
+    fetch("/api/log/"+encodeURIComponent(ns),{method:"POST",keepalive:true,
+      headers:{"Content-Type":"application/json"},body:JSON.stringify({entries})}).catch(()=>{});
+    if(CLOG.q.length)CLOG.t=setTimeout(clogFlush,1500);
+  }catch(e){}
+}
+addEventListener("pagehide",clogFlush);
 const b64url=b=>btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
 async function tokenRequest(body){
   const r=await fetch("https://accounts.spotify.com/api/token",{method:"POST",
     headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams(body)});
-  if(!r.ok){const err=new Error("Spotify login failed ("+r.status+")");
+  if(!r.ok){clog("auth",{grant:body.grant_type,status:r.status});
+    const err=new Error("Spotify login failed ("+r.status+")");
     err.fatal=(r.status===400||r.status===401);throw err}   // only 400/401 mean the session is dead
   const j=await r.json();
   AUTH.tok={access:j.access_token,refresh:j.refresh_token||(AUTH.tok&&AUTH.tok.refresh),
@@ -352,7 +374,7 @@ async function login(){
   const challenge=b64url(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(verifier)));
   location.href="https://accounts.spotify.com/authorize?"+new URLSearchParams({
     client_id:AUTH.clientId,response_type:"code",redirect_uri:AUTH.redirectUri,
-    scope:"playlist-read-private playlist-read-collaborative user-read-playback-state user-modify-playback-state streaming user-read-email user-read-private",
+    scope:"playlist-read-private playlist-read-collaborative playlist-modify-public playlist-modify-private user-read-playback-state user-modify-playback-state streaming user-read-email user-read-private",
     code_challenge_method:"S256",code_challenge:challenge});
 }
 /* Single-flight refresh, ported from index.html. Spotify rotates the refresh token on
@@ -416,7 +438,11 @@ async function api(path,opts={},_depth=0){
     await new Promise(x=>setTimeout(x,wait));
     return api(path,opts,_depth+1);
   }
-  if(!r.ok)throw new Error("Spotify "+r.status);
+  if(!r.ok){
+    let msg="";try{const j=await r.json();msg=(j&&j.error&&j.error.message)||""}catch(e){}
+    clog("api",{method:opts.method||"GET",path:path.split("?")[0],status:r.status,msg});
+    throw new Error("Spotify "+r.status);
+  }
   netOK();
   return r.status===204?null:r.json();
 }
@@ -490,6 +516,7 @@ $("#tgtConnect").onclick=()=>setTarget("connect");
 /* In-app audio has failed: never leave the badge saying live over silence. */
 let sdkErrTimes=[];
 function sdkFail(msg){
+  clog("sdkFail",{msg,live:!!(W&&W.live),target});
   if(!W||!W.live||target!=="sdk"){toast(msg,6000);return}
   W.live=false;$("#liveTag").textContent="SIMULATED";$("#liveTag").className="sim";
   if(sdk)sdk.pause().catch(()=>{});            // stop it skipping through the playlist
@@ -500,6 +527,8 @@ function initSdk(){
   sdkReady=new Promise(resolve=>{
     sdk=new Spotify.Player({name:"Pulseline",getOAuthToken:cb=>ensureToken().then(cb),volume:1});
     sdk.addListener("ready",({device_id})=>{sdkId=device_id;resolve(device_id)});
+    ["ready","not_ready","initialization_error","authentication_error","account_error",
+     "playback_error","autoplay_failed"].forEach(ev=>sdk.addListener(ev,e=>clog("sdk",{ev,msg:(e&&e.message)||""})));
     sdk.addListener("not_ready",()=>{sdkId=null;netBad()});
     sdk.addListener("ready",()=>{netOK()});
     sdk.addListener("initialization_error",({message})=>{resolve(null);sdkFail("In-app player couldn't start ("+message+")")});
@@ -925,6 +954,7 @@ async function forceLinearPlayback(deviceId){
 }
 async function beginPlayback(){          // called from the START tap (a user gesture)
   if(!W.live)return true;
+  clog("begin",{target,streamScope:hasStreamScope(),ua:navigator.userAgent});
   try{
     let q="",devId=null;
     if(target==="sdk"){
@@ -952,6 +982,7 @@ async function beginPlayback(){          // called from the START tap (a user ge
     },2500);
     return true;
   }catch(e){
+    clog("beginFail",{target,msg:e.message});
     W.live=false;$("#liveTag").textContent="SIMULATED";$("#liveTag").className="sim";
     toast(target==="sdk"
       ?"In-app playback failed ("+e.message+") — switch to 'Spotify app' on the splash. Running simulated."

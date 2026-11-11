@@ -4,6 +4,7 @@
 Run:  python3 server.py [port]     (default port 8888)
 """
 import json
+import time
 import os
 import sys
 from http.server import HTTPServer, SimpleHTTPRequestHandler
@@ -113,6 +114,37 @@ def history_path(path):
         if NS_RE.match(ns):
             return os.path.join(DATA_DIR, f"history-{ns}.json")
     return None
+
+
+# Client diagnostics: pages append Spotify player events and API failures here so a
+# developer (or agent) can read what a phone actually saw, instead of asking for a
+# pasted console log. Append-only JSON lines, one file per account, rotated once it
+# passes LOG_MAX_BYTES (a storage bound chosen for this app, not a measured value).
+LOG_MAX_BYTES = 1_000_000
+LOG_ENTRY_MAX_CHARS = 2000
+
+
+def log_path(path):
+    p = path.split("?")[0]
+    if p.startswith("/api/log/"):
+        ns = p[len("/api/log/"):]
+        if NS_RE.match(ns):
+            return os.path.join(DATA_DIR, f"clientlog-{ns}.jsonl")
+    return None
+
+
+def append_log(lp, entries):
+    try:
+        if os.path.getsize(lp) > LOG_MAX_BYTES:
+            os.replace(lp, lp + ".1")
+    except FileNotFoundError:
+        pass
+    now = int(time.time() * 1000)
+    with open(lp, "a", encoding="utf-8") as f:
+        for e in entries[:50]:
+            if isinstance(e, dict):
+                line = json.dumps({"srv": now, **e}, ensure_ascii=False)
+                f.write(line[:LOG_ENTRY_MAX_CHARS] + "\n")
 
 
 def read_json(path, default):
@@ -241,6 +273,18 @@ class Handler(SimpleHTTPRequestHandler):
             write_json_atomic(ap, {"tracks": tracks})
             _summary_cache["data"] = None          # invalidate the slim projection
             self._json({"count": len(tracks)})
+            return
+
+        lp = log_path(self.path)
+        if lp:  # append-only diagnostics; never read back by the app
+            entries = payload.get("entries")
+            if not isinstance(entries, list):
+                self.send_response(400)
+                self.end_headers()
+                return
+            append_log(lp, entries)
+            self.send_response(204)
+            self.end_headers()
             return
 
         hp = history_path(self.path)
