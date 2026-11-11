@@ -225,6 +225,49 @@ class TestDegradeAndFailure(unittest.TestCase):
         found = by_code([entry("shuffleState", observed={})], "shuffle-state")
         self.assertIn("no shuffle field at all", found[0].message)
 
+    def test_shuffle_off_before_play_and_on_after_blames_play(self):
+        """quirk 4: setting shuffle after play does not reorder the queue, so this
+        verdict and the next one need completely different fixes."""
+        found = by_code([
+            entry("shuffleState", t=1, when="before-play", observed={"shuffle_state": False}),
+            entry("shuffleState", t=2, when="after-play", observed={"shuffle_state": True}),
+        ], "shuffle-reenabled-by-play")
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].severity, clientlog.HIGH)
+        self.assertIn("turned it back on", found[0].message)
+
+    def test_shuffle_on_before_play_blames_the_ignored_call(self):
+        found = by_code([
+            entry("shuffleState", t=1, when="before-play", observed={"shuffle_state": True}),
+            entry("shuffleState", t=2, when="after-play", observed={"shuffle_state": True}),
+        ], "shuffle-call-ignored")
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].severity, clientlog.HIGH)
+        self.assertIn("accepted the call and ignored it", found[0].message)
+
+    def test_shuffle_off_throughout_is_clean(self):
+        found = by_code([
+            entry("shuffleState", t=1, when="before-play", observed={"shuffle_state": False}),
+            entry("shuffleState", t=2, when="after-play", observed={"shuffle_state": False}),
+        ], "shuffle-clean")
+        self.assertEqual(found[0].severity, clientlog.INFO)
+
+    def test_one_reading_alone_draws_no_conclusion(self):
+        """An older page version only took the post-play reading. Without both, which
+        step lost the setting is unknowable and must not be guessed at."""
+        one = [entry("shuffleState", when="after-play", observed={"shuffle_state": True})]
+        for code in ("shuffle-reenabled-by-play", "shuffle-call-ignored", "shuffle-clean"):
+            self.assertEqual(by_code(one, code), [], code)
+
+    def test_an_unparseable_success_body_is_recorded_as_info(self):
+        found = by_code([entry("apiBody", method="PUT", path="/me/player/shuffle",
+                               status=200, head="RupOGcfsumG098JKNl0Dx0MFITk")],
+                        "unparseable-success-body")
+        self.assertEqual(found[0].severity, clientlog.INFO)
+        self.assertIn("/me/player/shuffle", found[0].message)
+        self.assertIn("RupOGcf", found[0].message)
+        self.assertIn("Treated as success", found[0].message)
+
     def test_an_in_app_run_with_no_ready_event_is_flagged(self):
         """The 6s device-id race in beginPlayback was lost."""
         found = by_code([entry("begin", target="sdk", streamScope=True)], "no-ready")

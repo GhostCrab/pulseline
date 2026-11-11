@@ -168,8 +168,22 @@ async function api(path,opts={}){
      and /repeat while shuffle stayed on. The failure looked like "Pulseline cannot turn
      shuffle off" and was really this. debug/sdk-probe.html always read r.text(). */
   if(r.status===204)return null;
+  /* A 2xx IS success; the body is informational. Spotify's player commands answer with
+     an empty body, and sometimes with a short non-JSON token - an iPhone saw
+     `JSON Parse error: Unexpected identifier "RupOGcf..."` from PUT /me/player/shuffle.
+     Throwing there turned an ACCEPTED command into a reported failure. Record what came
+     back so it stays diagnosable, and return null. */
   const text=await r.text();
-  return text?JSON.parse(text):null;
+  if(!text)return null;
+  try{return JSON.parse(text)}
+  catch(e){
+    /* Via window: only workout.html defines clog, and reaching it through the global
+       keeps this one api() body identical across all three copies (CODING_STANDARDS,
+       ADR-0001) instead of forking it for one line. */
+    if(window.clog)window.clog("apiBody",{method:opts.method||"GET",
+      path:path.split("?")[0],status:r.status,head:text.slice(0,120)});
+    return null;
+  }
 }
 
 /* ---------- state ---------- */

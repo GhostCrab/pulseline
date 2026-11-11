@@ -214,10 +214,14 @@ function freshApi(responses) {
     };
   };
   const logged = [];
-  const factory = new Function("ensureToken", "fetch", "netBad", "netOK", "clog",
+  /* api() reaches clog two ways: bare on the !r.ok path, and through window.clog for
+     the unparseable-body path (so that only workout.html need define it). In the page
+     both resolve to the same function, so inject both and record to one list. */
+  const factory = new Function("ensureToken", "fetch", "netBad", "netOK", "clog", "window",
     extractFunction("api") + ";\nreturn api;");
+  const record = (type, data) => logged.push({ type, data });
   const api = factory(async () => "tok", fetchStub, () => {}, () => {},
-    (type, data) => logged.push({ type, data }));
+    record, { clog: record });
   return { api, calls, logged };
 }
 
@@ -248,11 +252,30 @@ test("a 202 with an empty body is also a success", async () => {
   assert.equal(await api("/me/player/pause", { method: "PUT" }), null);
 });
 
-test("a genuinely malformed success body still raises", async () => {
-  // Empty is normal for a command endpoint; garbage is a real problem and must not be
-  // swallowed into a silent null.
-  const { api } = freshApi([{ status: 200, body: "{not json" }]);
-  await assert.rejects(() => api("/me/player"));
+test("REGRESSION: a 2xx with an unparseable body is a success, and is recorded", async () => {
+  /* Second round of the same field bug. With the empty-body case fixed, an iPhone then
+   * reported `JSON Parse error: Unexpected identifier "RupOGcf..."` from
+   * PUT /me/player/shuffle - a 2xx carrying a short non-JSON token. Throwing there
+   * turned a command Spotify had ACCEPTED into a reported failure, which is what made
+   * it look like Pulseline could not turn shuffle off.
+   *
+   * A 2xx is a success and the body is informational. It is recorded rather than
+   * swallowed, so it stays diagnosable. */
+  const { api, logged } = freshApi([{ status: 200, body: "RupOGcfsumG098JKNl0Dx0MFITk" }]);
+  assert.equal(await api("/me/player/shuffle?state=false", { method: "PUT" }), null);
+  assert.equal(logged.length, 1);
+  assert.equal(logged[0].type, "apiBody");
+  assert.equal(logged[0].data.status, 200);
+  assert.equal(logged[0].data.head, "RupOGcfsumG098JKNl0Dx0MFITk");
+  assert.equal(logged[0].data.path, "/me/player/shuffle", "query stripped");
+});
+
+test("a recorded body is truncated, so one response cannot fill the log", async () => {
+  // append_log caps a line at 2000 chars and truncates AFTER serialising, which would
+  // leave invalid JSON in the file.
+  const { api, logged } = freshApi([{ status: 200, body: "x".repeat(5000) }]);
+  await api("/me/player");
+  assert.equal(logged[0].data.head.length, 120);
 });
 
 test("a failed response still logs an api entry and throws with the status", async () => {

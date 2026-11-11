@@ -191,6 +191,51 @@ def findings(records, bad=()):
             evidence=[{"t": _when(rec), "observed": observed,
                        "repeat": rec.get("repeat"), "ctx": rec.get("ctx")}]))
 
+    # --- which step loses the shuffle setting ---------------------------------------
+    # The whole point of taking two readings. quirk 4: setting shuffle AFTER play does
+    # not reorder the queue, so "the call was ignored" and "play re-enabled it" need
+    # completely different fixes and must not be confused.
+    shuf = _of_type(records, "shuffleState")
+    pre = [r for r in shuf if r.get("when") == "before-play"]
+    post = [r for r in shuf if r.get("when") == "after-play"]
+    if pre and post:
+        pre_on = bool((pre[-1].get("observed") or {}).get("shuffle_state"))
+        post_on = bool((post[-1].get("observed") or {}).get("shuffle_state"))
+        if not pre_on and post_on:
+            out.append(Finding(
+                HIGH, "shuffle-reenabled-by-play",
+                "The forced-linear sequence DID turn shuffle off, and starting playback "
+                "turned it back on. Per quirk 4 this cannot be fixed by re-applying "
+                "shuffle afterwards, because that does not reorder the queue - the "
+                "context_uri start is what reintroduces it.",
+                rule="spotify-api.md quirk 4",
+                evidence=[{"before": pre[-1].get("observed"),
+                           "after": post[-1].get("observed")}]))
+        elif pre_on:
+            out.append(Finding(
+                HIGH, "shuffle-call-ignored",
+                "Shuffle was still on immediately after the shuffle call and before play, "
+                "so Spotify accepted the call and ignored it - most likely the transferred "
+                "device was not active yet when it landed.",
+                rule="spotify-api.md quirk 4",
+                evidence=[{"before": pre[-1].get("observed"),
+                           "after": post[-1].get("observed")}]))
+        else:
+            out.append(Finding(
+                INFO, "shuffle-clean",
+                "Shuffle was off both before and after play.",
+                evidence=[{"before": pre[-1].get("observed"),
+                           "after": post[-1].get("observed")}]))
+
+    # --- a success whose body would not parse ----------------------------------------
+    for rec in _of_type(records, "apiBody"):
+        out.append(Finding(
+            INFO, "unparseable-success-body",
+            "%s %s answered %s with a body that is not JSON: %r. Treated as success, "
+            "because a 2xx is a success and the body is informational."
+            % (rec.get("method"), rec.get("path"), rec.get("status"), rec.get("head")),
+            evidence=[{"t": _when(rec), "head": rec.get("head")}]))
+
     # --- the strict-mode orphaning class, caught rather than fatal -------------------
     # guardRun() in workout.html contains a throw inside the run loop so the countdown
     # keeps advancing. Before that containment existed this failed silently: the loop

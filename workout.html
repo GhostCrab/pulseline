@@ -472,8 +472,22 @@ async function api(path,opts={},_depth=0){
      and /repeat while shuffle stayed on. The failure looked like "Pulseline cannot turn
      shuffle off" and was really this. debug/sdk-probe.html always read r.text(). */
   if(r.status===204)return null;
+  /* A 2xx IS success; the body is informational. Spotify's player commands answer with
+     an empty body, and sometimes with a short non-JSON token - an iPhone saw
+     `JSON Parse error: Unexpected identifier "RupOGcf..."` from PUT /me/player/shuffle.
+     Throwing there turned an ACCEPTED command into a reported failure. Record what came
+     back so it stays diagnosable, and return null. */
   const text=await r.text();
-  return text?JSON.parse(text):null;
+  if(!text)return null;
+  try{return JSON.parse(text)}
+  catch(e){
+    /* Via window: only workout.html defines clog, and reaching it through the global
+       keeps this one api() body identical across all three copies (CODING_STANDARDS,
+       ADR-0001) instead of forking it for one line. */
+    if(window.clog)window.clog("apiBody",{method:opts.method||"GET",
+      path:path.split("?")[0],status:r.status,head:text.slice(0,120)});
+    return null;
+  }
 }
 
 /* ---------- workout state ---------- */
@@ -1002,6 +1016,17 @@ async function beginPlayback(){          // called from the START tap (a user ge
       devId=id;q="?device_id="+encodeURIComponent(id);
     }
     const linear=await forceLinearPlayback(devId);
+    /* DIAGNOSTIC, removable once the shuffle question is settled. Reads the shuffle
+       state BETWEEN the forced-linear sequence and play. quirk 4 says setting shuffle
+       after play does not reorder the queue, so the fix differs completely depending on
+       whether the shuffle call is ignored or play re-enables it - and only a reading
+       taken here can tell those apart. Costs one GET (~200-400ms) on the START gesture;
+       scripts/clientlog.py compares this against the 2.5s post-play reading. */
+    try{
+      const pre=await api("/me/player");
+      if(pre){const sh={};for(const k of Object.keys(pre))if(/shuffle/i.test(k))sh[k]=pre[k];
+        clog("shuffleState",{when:"before-play",observed:sh,repeat:pre.repeat_state});}
+    }catch(e){}
     await api("/me/player/play"+q,{method:"PUT",
       body:{context_uri:"spotify:playlist:"+W.key,offset:{position:0},position_ms:0}});
     /* Verify rather than assume: if the device ignored the shuffle call, say so once
@@ -1024,7 +1049,7 @@ async function beginPlayback(){          // called from the START tap (a user ge
            question from a real device instead of from speculation. */
         const sh={};
         for(const k of Object.keys(st))if(/shuffle/i.test(k))sh[k]=st[k];
-        clog("shuffleState",{observed:sh,repeat:st.repeat_state,
+        clog("shuffleState",{when:"after-play",observed:sh,repeat:st.repeat_state,
           ctx:(st.context&&st.context.uri)||null});
         if(st.shuffle_state&&W&&!W.warned.shuffle){
           W.warned.shuffle=true;
