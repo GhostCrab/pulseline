@@ -3,10 +3,12 @@
   "private": true,
   "description": "Dev-only tooling. The app itself has no dependencies; nothing here is served or deployed.",
   "scripts": {
-    "check": "python3 scripts/check.py"
+    "check": "python3 scripts/check.py",
+    "test": "python3 scripts/test.py"
   },
   "devDependencies": {
     "eslint": "9.39.5",
-    "globals": "15.15.0"
+    "globals": "15.15.0",
+    "js-yaml": "5.5.0"
   }
 }

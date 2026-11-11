@@ -1,6 +1,16 @@
 #!/bin/sh
 # Pulseline pre-commit guardrail. Enable once per clone:  git config core.hooksPath .githooks
-# Runs the same checks as CI (scripts/check.py); ESLint runs too once `npm install` is done.
+# Runs the same two commands as CI:
+#   scripts/check.py  mechanical checks (ESLint joins in once `npm install` is done)
+#   scripts/test.py   behaviour tests for the state API and analysis-core.js (~1.5s)
 cd "$(git rev-parse --show-toplevel)" || exit 1
-if command -v python3 >/dev/null 2>&1; then PY=python3; else PY=python; fi
-exec "$PY" scripts/check.py
+# Probe for an interpreter that RUNS, not one that is merely on PATH: on Windows,
+# `python3` resolves to the Microsoft Store alias stub, which exists, prints
+# "Python was not found" and exits 49. `command -v python3` is therefore not enough.
+PY=
+for c in python3 python py; do
+  if "$c" -c "import sys" >/dev/null 2>&1; then PY="$c"; break; fi
+done
+[ -n "$PY" ] || { echo "pre-commit: no working Python found (tried python3, python, py)"; exit 1; }
+"$PY" scripts/check.py || exit 1
+exec "$PY" scripts/test.py

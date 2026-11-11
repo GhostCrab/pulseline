@@ -38,6 +38,13 @@ cost is that an auth or storage fix must be applied to every page that has one �
 - **Checks** run anywhere: `python3 scripts/check.py`. Run `git config core.hooksPath .githooks`
   once per clone to run them on every commit, and `npm install` to enable the ESLint pass.
   CI runs the same script on every push.
+- **Tests** run anywhere too: `python3 scripts/test.py` (~1.5s, no browser, no Spotify
+  session, no network). The pre-commit hook and CI run it right after the checks. See
+  *The three tiers of guardrail* below for what belongs in it.
+  On Windows use `python scripts/test.py`: `python3` there is the Microsoft Store alias
+  stub, which exists on PATH, prints "Python was not found" and exits 49. The hook probes
+  for an interpreter that actually runs; `npm run check` / `npm test` do not, so call the
+  scripts directly on Windows.
 - **Client diagnostics**: `workout.html` appends Spotify player events and API failures to
   `data/clientlog-<ns>.jsonl` through `POST /api/log/<ns>`. Read that file first when playback
   misbehaves. `debug/sdk-probe.html` is a standalone in-app-player probe for deeper digging.
@@ -182,6 +189,85 @@ The editor once took ~50 s to load because it downloaded every track's full anal
 (~60 KB) cached in `server.py` against `(st_mtime_ns, st_size)`, and `loadAnalysis()` is
 fire-and-forget — the timeline draws immediately and redraws when analysis arrives. **Don't make
 the analysis fetch blocking again, and don't fetch the full records in the editor.**
+
+## The three tiers of guardrail
+
+Each tier catches what the one below it cannot. Put a new rule in the cheapest tier that
+can hold it.
+
+1. **`scripts/check.py`** — *mechanical*. A fixed syntactic pattern: syntax, identical
+   login scopes, version markers, undefined identifiers, debug tags. Deterministic, no
+   judgement. If a mistake can be described as a pattern, it belongs here, not in prose.
+2. **`CODING_STANDARDS.md`** — *judgement*. Cross-file consistency and "is the fallback
+   visible", read by the reviewer and not by the implementer. Only for what no check
+   could ever substitute for.
+3. **`scripts/test.py`** — *behaviour*. What neither a linter nor a reviewer can see: that
+   the state API still shallow-merges, that a retried workout log is still idempotent,
+   that an axis still refuses to invent a range.
+
+### What is in tier 3 today
+
+| suite | seam | reaches |
+|---|---|---|
+| `tests/test_server_api.py` | `server.py`'s HTTP interface, over real HTTP on a scratch port | the storage-model invariants: shallow merge, the forced `history` drop, history idempotency and ts ordering, both legacy migrations, the summary projection and its mtime+size cache, `NS_RE` rejection, the 400-before-404 dispatch order, the client-log caps and rotation, `write_json_atomic`'s rolling backups |
+| `tests/analysis-core.test.js` | `analysis-core.js`'s pure surface, via a stub `window` | `foldToReference`, `loudnessCurve01`, the `METRICS` catalogue, `metricByKey`, `metricValue`, `metricBounds` — including the documented-vs-observed provenance the *no-invented-numbers rule* rests on |
+| `tests/test_clientlog.py` | `scripts/clientlog.py`, the client-diagnostics reader | the failure signatures it recognises in a real device's log, and that it survives the truncated lines `server.py` is guaranteed to write |
+| `tests/spotify-contract.test.js` | every Spotify path the pages reference, against `docs/spotify/open-api-schema.yaml` | that each path exists, is called with a method the spec defines, needs no scope the login omits, requests no scope nothing needs, and picks up no new deprecated endpoint. Enforces the `CODING_STANDARDS.md` rule that was previously review-only |
+| `tests/workout-guard.test.js` | `guardRun` in `workout.html`, extracted from the real source | that a throw in the run loop is contained, reported once per run, and recorded as a `loopFail` entry; plus structurally, that `tick` and `setPaused` schedule from a `finally` |
+
+None of these touches a browser, the Web Playback SDK, a Spotify session or the network.
+The playback *sequence* in `workout.html` is still not covered, because no seam reaches
+it — see *Hotspots* 1. That is the known gap, not an oversight.
+
+### Why there is no test against the live Spotify API
+
+Two blockers, both structural rather than a matter of effort:
+
+- **A credential cannot live in CI.** Pulseline is PKCE with no client secret, and
+  Spotify rotates the refresh token on every refresh (see the comment above
+  `refreshToken()`). A stored refresh token therefore works once; the next run gets a
+  400 indistinguishable from a dead session. Live tests are local-only, opt-in, with
+  the credential in gitignored `data/` — and note *Operational notes*: `data/` has been
+  scrubbed from git history once already.
+- **Player writes need an active device.** `play`, `shuffle` and `repeat` return
+  `404 NO_ACTIVE_DEVICE` with nothing attached, so the quirk-4 ordering sequence cannot
+  be exercised headlessly at all.
+
+More importantly, live credentials would not catch the bugs that actually hurt. Those
+live in the retry ladder, the lost-refresh race and the snap-or-slew arithmetic, and
+testing them means *forcing* conditions — a specific `Retry-After`, a 400 that is a lost
+race, a deliberately stale `progress_ms`. Against the real API those are
+nondeterministic or impossible to provoke; against a fake at the `api()` seam they are
+exact. The contract suite above covers the remaining question a live call would answer
+("is our understanding of the API right?") from the spec, for free.
+
+### Verifying the playback path, which tier 3 cannot reach
+
+`scripts/clientlog.py` reads `data/clientlog-<ns>.jsonl` and reports what a device
+actually saw — the missing-`streaming`-scope signature, paired `playback_error` events,
+each named SDK failure, terminal API failures. It exits non-zero on a high-severity
+finding. This is the only route to evidence about in-app audio, because quirk 9 means
+the API reports success throughout a silent failure.
+
+`scripts/hitl-workout.sh` drives *you* through the full sequence the standards require
+(start, pause, external pause, finish, completion card, handoff), snapshots the client
+log by byte offset so findings cover only that pass, and prints a verdict block to paste
+into the PR as the re-verification record. It refuses to start if the prerequisites
+aren't met, because a dirty or demo workspace runs silent by design and would pass
+vacuously.
+
+Automation cannot replace that pass. A browser-driving agent sees the DOM, the console
+and the network, and all three report success during the exact failure that matters.
+
+### Two rules for adding to tier 3
+
+- **Test only at an agreed seam.** You cannot test everything here; a test at a seam
+  nobody chose lands effort on edge cases instead of the fragile paths. The two seams
+  above were picked deliberately. Adding a third is a decision, not a detail.
+- **Watch every new test fail before you trust it.** Force the red by mutating the code
+  the test is meant to protect, confirm the mutation is on disk, then restore. A test you
+  have only ever seen pass proves nothing — and *On reporting work in this repo* records
+  that an unreliable verification tool has already had to be thrown away here once.
 
 ## Hotspots — tread carefully
 

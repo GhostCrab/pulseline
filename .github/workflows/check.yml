@@ -11,3 +11,4 @@ jobs:
           cache: npm
       - run: npm ci
       - run: python3 scripts/check.py --require-eslint
+      - run: python3 scripts/test.py --require-node
