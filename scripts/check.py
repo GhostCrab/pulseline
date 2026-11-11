@@ -73,14 +73,14 @@ def check_syntax(node):
             for i, (code, line0) in enumerate(inline_scripts(page)):
                 tmp = os.path.join(td, f"{os.path.basename(page)}.{i}.js")
                 open(tmp, "w", encoding="utf-8").write(code)
-                r = subprocess.run([node, "--check", tmp], capture_output=True, text=True)
+                r = subprocess.run([node, "--check", tmp], capture_output=True, text=True, encoding="utf-8")
                 if r.returncode:
                     m = re.search(re.escape(tmp) + r":(\d+)", r.stderr)
                     where = f"{rel(page)}:{line0 + int(m.group(1)) - 1}" if m else rel(page)
                     err = next((l for l in r.stderr.splitlines() if "Error" in l), r.stderr.strip()[:200])
                     fail("syntax", f"{where}: {err}")
         for js in SHARED_JS:
-            r = subprocess.run([node, "--check", js], capture_output=True, text=True)
+            r = subprocess.run([node, "--check", js], capture_output=True, text=True, encoding="utf-8")
             if r.returncode:
                 fail("syntax", f"{rel(js)}: {r.stderr.strip()[:300]}")
 
@@ -146,7 +146,7 @@ def check_eslint(node, required):
     for code, line0, src in jobs:
         r = subprocess.run([node, eslint, "--format", "json", "--stdin", "--stdin-filename",
                             os.path.join(ROOT, rel(src).replace("/", "_") + ".js")],
-                           input=code, capture_output=True, text=True, cwd=ROOT)
+                           input=code, capture_output=True, text=True, encoding="utf-8", cwd=ROOT)
         try:
             results = json.loads(r.stdout)
         except ValueError:

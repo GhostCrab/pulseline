@@ -25,6 +25,10 @@ An interval's effort level: low, medium, high or peak.
 The instant one song ends and the next begins.
 _Avoid_: song change, crossfade
 
+**Span**:
+The stretch of the timeline one track occupies, from where it starts to where it ends.
+_Avoid_: slot, segment, block
+
 **Clash**:
 A transition that lands inside a peak interval.
 _Avoid_: conflict, peak collision
@@ -52,6 +56,18 @@ Where workout audio comes from: **This app** (the in-browser Web Playback SDK pl
 
 **Live sync**:
 Keeping the app's workout clock aligned with what Spotify is actually playing.
+
+**Snap**:
+A live sync correction applied at once, because the gap is too large to hide.
+
+**Slew**:
+A live sync correction absorbed gradually, so the countdown never visibly jumps.
+_Avoid_: drift correction, adjustment
+
+**Order drift**:
+Playback running in a different order from the timeline — what shuffle being left on looks
+like from inside a workout.
+_Avoid_: desync, mismatch
 
 **Handoff**:
 Moving playback at workout completion from the in-app player to the Spotify app, starting at the exact position so the music carries on without a repeat.
