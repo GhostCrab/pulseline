@@ -465,7 +465,15 @@ async function api(path,opts={},_depth=0){
     throw new Error("Spotify "+r.status);
   }
   netOK();
-  return r.status===204?null:r.json();
+  /* An empty body is a SUCCESS, not a parse error. Spotify's player commands are
+     documented as 204 but can answer 200 (or 202) with no content, and r.json() on an
+     empty body throws - on WebKit with the message "The string did not match the
+     expected pattern.", which is what an iPhone reported for PUT /me/player/shuffle
+     and /repeat while shuffle stayed on. The failure looked like "Pulseline cannot turn
+     shuffle off" and was really this. debug/sdk-probe.html always read r.text(). */
+  if(r.status===204)return null;
+  const text=await r.text();
+  return text?JSON.parse(text):null;
 }
 
 /* ---------- workout state ---------- */
@@ -974,9 +982,9 @@ async function forceLinearPlayback(deviceId){
   }catch(e){}
   let ok=true;
   try{await api("/me/player/shuffle?state=false"+q,{method:"PUT"})}
-  catch(e){ok=false;clog("linearFail",{step:"shuffle",msg:e.message})}
+  catch(e){ok=false;clog("linearFail",{step:"shuffle",msg:e.message,name:e.name})}
   try{await api("/me/player/repeat?state=off"+q,{method:"PUT"})}
-  catch(e){ok=false;clog("linearFail",{step:"repeat",msg:e.message})}
+  catch(e){ok=false;clog("linearFail",{step:"repeat",msg:e.message,name:e.name})}
   return ok;
 }
 async function beginPlayback(){          // called from the START tap (a user gesture)
@@ -1026,7 +1034,7 @@ async function beginPlayback(){          // called from the START tap (a user ge
     },2500);
     return true;
   }catch(e){
-    clog("beginFail",{target,msg:e.message});
+    clog("beginFail",{target,msg:e.message,name:e.name});
     W.live=false;$("#liveTag").textContent="SIMULATED";$("#liveTag").className="sim";
     toast(target==="sdk"
       ?"In-app playback failed ("+e.message+") — switch to 'Spotify app' on the splash. Running simulated."

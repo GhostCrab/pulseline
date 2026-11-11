@@ -511,7 +511,15 @@ async function api(path,opts={},_depth=0){
   }
   if(!r.ok){const tx=await r.text();const err=new Error(`Spotify ${r.status}: ${tx.slice(0,140)}`);
     err.auth=(r.status===401);throw err}
-  return r.status===204?null:r.json();
+  /* An empty body is a SUCCESS, not a parse error. Spotify's player commands are
+     documented as 204 but can answer 200 (or 202) with no content, and r.json() on an
+     empty body throws - on WebKit with the message "The string did not match the
+     expected pattern.", which is what an iPhone reported for PUT /me/player/shuffle
+     and /repeat while shuffle stayed on. The failure looked like "Pulseline cannot turn
+     shuffle off" and was really this. debug/sdk-probe.html always read r.text(). */
+  if(r.status===204)return null;
+  const text=await r.text();
+  return text?JSON.parse(text):null;
 }
 
 /* ============================== spotify data ============================== */

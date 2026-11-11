@@ -160,9 +160,12 @@ def findings(records, bad=()):
     for rec in _of_type(records, "linearFail"):
         out.append(Finding(
             HIGH, "linear-fail",
-            "The %s call failed while forcing linear playback: %s. Playback may be "
+            "The %s call failed while forcing linear playback: %s%s. Playback may be "
             "shuffled or repeating, so the timeline will not match the audio."
-            % (rec.get("step") or "ordering", rec.get("msg") or "(no message)"),
+            % (rec.get("step") or "ordering", rec.get("msg") or "(no message)",
+               " [%s - a client-side fault, not a Spotify rejection; a rejection would "
+               "also have logged an `api` entry]" % rec["name"]
+               if rec.get("name") and rec["name"] != "Error" else ""),
             rule="spotify-api.md quirk 4 (activate, shuffle off, repeat off, then play)",
             evidence=[{"t": _when(rec), "step": rec.get("step")}]))
 
@@ -174,12 +177,17 @@ def findings(records, bad=()):
         observed = rec.get("observed") or {}
         unknown = {k: v for k, v in observed.items() if k != "shuffle_state"}
         sev = WARN if (observed.get("shuffle_state") or unknown) else INFO
+        extra = ""
+        if unknown:
+            on = [k for k, v in unknown.items() if v]
+            extra = (" %s is on, and is not described in the OpenAPI spec at all - that "
+                     "is what smart shuffle looks like" % ", ".join(on) if on else
+                     " %s is present but off; the OpenAPI spec does not describe it"
+                     % ", ".join(unknown))
         out.append(Finding(
             sev, "shuffle-state",
-            "Spotify reported %s after the forced-linear sequence%s."
-            % (json.dumps(observed) if observed else "no shuffle field at all",
-               " - including a field the OpenAPI spec does not document, which is what "
-               "smart shuffle would look like" if unknown else ""),
+            "Spotify reported %s after the forced-linear sequence.%s"
+            % (json.dumps(observed) if observed else "no shuffle field at all", extra),
             evidence=[{"t": _when(rec), "observed": observed,
                        "repeat": rec.get("repeat"), "ctx": rec.get("ctx")}]))
 

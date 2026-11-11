@@ -26,9 +26,24 @@ const src = fs.readFileSync(PAGE, "utf8");
 /* Extract `function <name>(...){...}` by brace matching, so the test breaks loudly if
  * the function is renamed or removed rather than silently testing nothing. */
 function extractFunction(name) {
-  const start = src.indexOf("function " + name + "(");
+  let start = src.indexOf("function " + name + "(");
   assert.notEqual(start, -1, `workout.html no longer defines ${name}()`);
-  let i = src.indexOf("{", start), depth = 0;
+  // Keep an `async` prefix: without it the extracted body has `await` in a sync
+  // function and new Function() throws.
+  if (src.slice(Math.max(0, start - 6), start) === "async ") start -= 6;
+
+  /* Skip the parameter list by matching parens FIRST. Scanning for the next "{" from
+   * the name would find the braces inside a default value - api(path, opts={}, ...)
+   * truncated to `async function api(path,opts={}` and new Function choked on it. */
+  let i = src.indexOf("(", start), parens = 0;
+  for (; i < src.length; i++) {
+    if (src[i] === "(") parens++;
+    else if (src[i] === ")" && --parens === 0) { i++; break; }
+  }
+  i = src.indexOf("{", i);
+  assert.notEqual(i, -1, `could not find the body of ${name}()`);
+
+  let depth = 0;
   for (; i < src.length; i++) {
     if (src[i] === "{") depth++;
     else if (src[i] === "}" && --depth === 0) return src.slice(start, i + 1);
@@ -172,6 +187,90 @@ test("setPaused starts the polls from inside its finally block too", () => {
   const body = finallyBody(extractFunction("setPaused"));
   assert.match(body, /startPoll\(\)/, "live sync must start even if the body threw");
   assert.match(body, /startPausePoll\(\)/, "the pause poll must start on the paused path");
+});
+
+/* ---- api(): how a successful response body is read ---- */
+
+/* Builds api() with every dependency injected, and a fetch stub that behaves like
+ * WebKit: Response.json() on an EMPTY body throws, with Safari's exact message.
+ * That is what a real iPhone produced in data/clientlog-u_ghostcrab.jsonl. */
+function freshApi(responses) {
+  const calls = [];
+  let i = 0;
+  const fetchStub = async (url, opts) => {
+    calls.push({ url, method: (opts && opts.method) || "GET" });
+    const r = responses[Math.min(i++, responses.length - 1)];
+    return {
+      status: r.status,
+      ok: r.status >= 200 && r.status < 300,
+      headers: { get: () => null },
+      text: async () => r.body,
+      json: async () => {
+        if (!r.body) {
+          throw new SyntaxError("The string did not match the expected pattern.");
+        }
+        return JSON.parse(r.body);
+      },
+    };
+  };
+  const logged = [];
+  const factory = new Function("ensureToken", "fetch", "netBad", "netOK", "clog",
+    extractFunction("api") + ";\nreturn api;");
+  const api = factory(async () => "tok", fetchStub, () => {}, () => {},
+    (type, data) => logged.push({ type, data }));
+  return { api, calls, logged };
+}
+
+test("a 204 success returns null without touching the body", async () => {
+  const { api } = freshApi([{ status: 204, body: "" }]);
+  assert.equal(await api("/me/player/shuffle?state=false", { method: "PUT" }), null);
+});
+
+test("REGRESSION: a 200 with an EMPTY body is a success, not a parse error", async () => {
+  /* The field failure. Spotify's player commands are documented as 204 but can answer
+   * 200 with no content; api() called r.json() on anything that was not exactly 204, and
+   * on WebKit that throws "The string did not match the expected pattern."
+   *
+   * Observed on an iPhone: PUT /me/player/shuffle and /repeat both failed with that
+   * message, no `api` entry was logged because the response was fine, and shuffle stayed
+   * on - so the symptom read as "Pulseline cannot turn shuffle off". */
+  const { api } = freshApi([{ status: 200, body: "" }]);
+  assert.equal(await api("/me/player/shuffle?state=false", { method: "PUT" }), null);
+});
+
+test("a 200 with a JSON body is parsed", async () => {
+  const { api } = freshApi([{ status: 200, body: '{"is_playing":true}' }]);
+  assert.deepEqual(await api("/me/player"), { is_playing: true });
+});
+
+test("a 202 with an empty body is also a success", async () => {
+  const { api } = freshApi([{ status: 202, body: "" }]);
+  assert.equal(await api("/me/player/pause", { method: "PUT" }), null);
+});
+
+test("a genuinely malformed success body still raises", async () => {
+  // Empty is normal for a command endpoint; garbage is a real problem and must not be
+  // swallowed into a silent null.
+  const { api } = freshApi([{ status: 200, body: "{not json" }]);
+  await assert.rejects(() => api("/me/player"));
+});
+
+test("a failed response still logs an api entry and throws with the status", async () => {
+  const { api, logged } = freshApi([{ status: 403, body: '{"error":{"message":"nope"}}' }]);
+  await assert.rejects(() => api("/me/player/shuffle?state=false", { method: "PUT" }),
+    /Spotify 403/);
+  assert.equal(logged.length, 1);
+  assert.equal(logged[0].type, "api");
+  assert.equal(logged[0].data.status, 403);
+  assert.equal(logged[0].data.msg, "nope");
+});
+
+test("the absence of an api log entry means the response was fine", async () => {
+  // This is the inference that located the bug: the client log showed the calls
+  // failing with no `api` entry, which is only possible on a success path.
+  const { api, logged } = freshApi([{ status: 200, body: "" }]);
+  await api("/me/player/repeat?state=off", { method: "PUT" });
+  assert.deepEqual(logged, []);
 });
 
 /* ---- applySync: the decision from sync-core, applied and reported ---- */

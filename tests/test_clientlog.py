@@ -198,7 +198,7 @@ class TestDegradeAndFailure(unittest.TestCase):
                         "shuffle-state")
         self.assertEqual(found[0].severity, clientlog.WARN)
 
-    def test_an_undocumented_shuffle_field_is_called_out(self):
+    def test_an_undocumented_shuffle_field_that_is_ON_is_called_out(self):
         """Smart shuffle is a third state the OpenAPI spec does not describe. We do not
         guess its field name - we record whatever Spotify sends and flag anything beyond
         the documented `shuffle_state`."""
@@ -206,8 +206,20 @@ class TestDegradeAndFailure(unittest.TestCase):
                                observed={"shuffle_state": False, "smart_shuffle": True})],
                         "shuffle-state")
         self.assertEqual(found[0].severity, clientlog.WARN)
-        self.assertIn("does not document", found[0].message)
         self.assertIn("smart_shuffle", found[0].message)
+        self.assertIn("OpenAPI spec", found[0].message)
+        self.assertIn("is on", found[0].message)
+
+    def test_an_undocumented_field_that_is_OFF_is_not_called_shuffle(self):
+        """A real device reported {"shuffle_state": true, "smart_shuffle": false}: plain
+        shuffle, not the third state. Saying "that is what smart shuffle looks like"
+        there would send the next reader down the wrong path."""
+        found = by_code([entry("shuffleState",
+                               observed={"shuffle_state": True, "smart_shuffle": False})],
+                        "shuffle-state")
+        self.assertEqual(found[0].severity, clientlog.WARN)
+        self.assertIn("present but off", found[0].message)
+        self.assertNotIn("what smart shuffle looks like", found[0].message)
 
     def test_no_shuffle_field_at_all_is_reported_plainly(self):
         found = by_code([entry("shuffleState", observed={})], "shuffle-state")
