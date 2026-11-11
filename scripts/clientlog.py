@@ -148,6 +148,33 @@ def findings(records, bad=()):
             "Starting playback failed: %s" % (rec.get("msg") or "(no message)"),
             evidence=[{"t": _when(rec), "target": rec.get("target")}]))
 
+    # --- the forced-linear sequence failed outright ---------------------------------
+    for rec in _of_type(records, "linearFail"):
+        out.append(Finding(
+            HIGH, "linear-fail",
+            "The %s call failed while forcing linear playback: %s. Playback may be "
+            "shuffled or repeating, so the timeline will not match the audio."
+            % (rec.get("step") or "ordering", rec.get("msg") or "(no message)"),
+            rule="spotify-api.md quirk 4 (activate, shuffle off, repeat off, then play)",
+            evidence=[{"t": _when(rec), "step": rec.get("step")}]))
+
+    # --- what Spotify actually reported about shuffle --------------------------------
+    # Recorded rather than interpreted. "Smart shuffle" is a third state that does not
+    # appear in docs/spotify/open-api-schema.yaml, so the point of this entry is to find
+    # out what the real field is called and what it holds, from a real device.
+    for rec in _of_type(records, "shuffleState"):
+        observed = rec.get("observed") or {}
+        unknown = {k: v for k, v in observed.items() if k != "shuffle_state"}
+        sev = WARN if (observed.get("shuffle_state") or unknown) else INFO
+        out.append(Finding(
+            sev, "shuffle-state",
+            "Spotify reported %s after the forced-linear sequence%s."
+            % (json.dumps(observed) if observed else "no shuffle field at all",
+               " - including a field the OpenAPI spec does not document, which is what "
+               "smart shuffle would look like" if unknown else ""),
+            evidence=[{"t": _when(rec), "observed": observed,
+                       "repeat": rec.get("repeat"), "ctx": rec.get("ctx")}]))
+
     # --- the strict-mode orphaning class, caught rather than fatal -------------------
     # guardRun() in workout.html contains a throw inside the run loop so the countdown
     # keeps advancing. Before that containment existed this failed silently: the loop

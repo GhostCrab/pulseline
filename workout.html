@@ -317,7 +317,7 @@ body.m-focus #intName{font-size:clamp(24px,7vw,40px)}
 <div id="toast"></div>
 
 <script src="config.js?v=4"></script>
-<script src="sync-core.js?v=1"></script>
+<script src="sync-core.js?v=2"></script>
 <script>
 "use strict";
 const $=s=>document.querySelector(s);
@@ -973,8 +973,10 @@ async function forceLinearPlayback(deviceId){
     if(deviceId)await api("/me/player",{method:"PUT",body:{device_ids:[deviceId],play:false}});
   }catch(e){}
   let ok=true;
-  try{await api("/me/player/shuffle?state=false"+q,{method:"PUT"})}catch(e){ok=false}
-  try{await api("/me/player/repeat?state=off"+q,{method:"PUT"})}catch(e){ok=false}
+  try{await api("/me/player/shuffle?state=false"+q,{method:"PUT"})}
+  catch(e){ok=false;clog("linearFail",{step:"shuffle",msg:e.message})}
+  try{await api("/me/player/repeat?state=off"+q,{method:"PUT"})}
+  catch(e){ok=false;clog("linearFail",{step:"repeat",msg:e.message})}
   return ok;
 }
 async function beginPlayback(){          // called from the START tap (a user gesture)
@@ -991,15 +993,32 @@ async function beginPlayback(){          // called from the START tap (a user ge
       if(!id)throw new Error("in-app player unavailable");
       devId=id;q="?device_id="+encodeURIComponent(id);
     }
-    await forceLinearPlayback(devId);
+    const linear=await forceLinearPlayback(devId);
     await api("/me/player/play"+q,{method:"PUT",
       body:{context_uri:"spotify:playlist:"+W.key,offset:{position:0},position_ms:0}});
     /* Verify rather than assume: if the device ignored the shuffle call, say so once
        instead of letting the timeline quietly disagree with the audio. */
+    if(!linear&&W&&!W.warned.shuffle){
+      W.warned.shuffle=true;
+      toast("Couldn't turn shuffle off in Spotify — the timeline may not match the audio",6000);
+    }
     setTimeout(async()=>{
       try{
         const st=await api("/me/player");
-        if(st&&st.shuffle_state&&W&&!W.warned.shuffle){
+        if(!st)return;
+        /* Record what Spotify ACTUALLY reports about shuffle, rather than assuming.
+           Smart shuffle is a third state that appears NOWHERE in
+           docs/spotify/open-api-schema.yaml - the spec has only `shuffle_state:
+           boolean` and PUT /me/player/shuffle takes only a boolean - so guessing a
+           field name would be inventing API behaviour. Instead log every shuffle-ish
+           key the player object carries and read it back from the client log
+           (scripts/clientlog.py reports it). Cheap, bounded, and it answers the
+           question from a real device instead of from speculation. */
+        const sh={};
+        for(const k of Object.keys(st))if(/shuffle/i.test(k))sh[k]=st[k];
+        clog("shuffleState",{observed:sh,repeat:st.repeat_state,
+          ctx:(st.context&&st.context.uri)||null});
+        if(st.shuffle_state&&W&&!W.warned.shuffle){
           W.warned.shuffle=true;
           toast("Spotify still has shuffle on — turn it off in the app or the timeline won't match",6000);
         }
@@ -1313,7 +1332,7 @@ function draw(){
    no-cache, which is what the ?v= marker on the script tag is for; this gate catches
    the case where the edge served an old body anyway. analyze.html's NEEDS_CORE gate
    is the precedent. scripts/check.py keeps the three numbers in step. */
-const NEEDS_SYNC=1;
+const NEEDS_SYNC=2;
 (async()=>{
   $("#ruShow").textContent=AUTH.redirectUri;
   if(!window.PLSync){

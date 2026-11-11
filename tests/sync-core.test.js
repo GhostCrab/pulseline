@@ -178,18 +178,62 @@ test("order drift is reported but the correction is still made", () => {
   assert.equal(got.to, 200);
 });
 
-test("order drift can accompany a slew as well as a snap", () => {
-  // Span c starts at 200 and the clock is 26s away from it, past the threshold, but
-  // the position makes the resulting delta small enough to absorb.
-  const got = PL.syncCorrection(SPANS, { uri: "spotify:track:c", positionSec: 26 }, 226);
-  assert.equal(got.diagnosis, "orderDrift");
+test("REGRESSION: correct in-order playback never reports drift", () => {
+  /* The bug this replaced: order drift was judged on the distance from the clock to the
+   * START of the matched span, so it was true of any healthy playthrough more than 25s
+   * into a track. A real workout showed "Playback order doesn't match the timeline"
+   * repeatedly while playing the right playlist in the right order with shuffle off.
+   *
+   * Spotify agrees with the clock in every case below - that is what "correct" means. */
+  for (const [label, uri, positionSec, clockT] of [
+    ["1s into track a", "spotify:track:a", 1, 1],
+    ["60s into track a", "spotify:track:a", 60, 60],
+    ["99s into track a", "spotify:track:a", 99, 99],
+    ["30s into track b", "spotify:track:b", 30, 130],
+    ["90s into track c", "spotify:track:c", 90, 290],
+  ]) {
+    const got = PL.syncCorrection(SPANS, { uri, positionSec, rttSec: 0.1 }, clockT);
+    assert.equal(got.diagnosis, null, `${label} wrongly reported ${got.diagnosis}`);
+  }
+});
+
+test("a transition boundary does not look like drift", () => {
+  // The clock has just crossed into track b while Spotify still reports track a, a few
+  // hundred ms behind. Ordinary staleness, not an order problem.
+  const got = PL.syncCorrection(SPANS,
+    { uri: "spotify:track:a", positionSec: 99.8, rttSec: 0.2 }, 100.5);
+  assert.equal(got.diagnosis, null);
   assert.equal(got.action, "slew");
 });
 
-test("the order-drift threshold is exclusive", () => {
-  const at = PL.syncCorrection(SPANS, { uri: "spotify:track:c", positionSec: 25 }, 225);
-  assert.equal(at.diagnosis, null, "exactly 25s away is not yet drift");
-  const past = PL.syncCorrection(SPANS, { uri: "spotify:track:c", positionSec: 25 }, 174.9);
+test("a genuine jump to another track IS reported as drift", () => {
+  // Clock is 50s in, inside track a; Spotify is playing track c. That is what shuffle
+  // or a manual skip looks like.
+  const got = PL.syncCorrection(SPANS, { uri: "spotify:track:c", positionSec: 10 }, 50);
+  assert.equal(got.diagnosis, "orderDrift");
+  assert.equal(got.action, "snap");
+  assert.equal(got.to, 210);
+});
+
+test("order drift always accompanies a snap, never a slew", () => {
+  // ORDER_DRIFT_SEC > SNAP_SEC, so a correction big enough to be called drift is
+  // always big enough to snap. Asserted as an invariant over a sweep of deltas.
+  assert.ok(PL.ORDER_DRIFT_SEC > PL.SNAP_SEC, "the thresholds are the wrong way round");
+  for (let delta = -200; delta <= 200; delta += 0.5) {
+    const got = PL.syncCorrection(SPANS,
+      { uri: "spotify:track:b", positionSec: 50 + delta }, 150);
+    if (got.diagnosis === "orderDrift") {
+      assert.equal(got.action, "snap", `delta ${delta} reported drift with a ${got.action}`);
+    }
+  }
+});
+
+test("the order-drift threshold is exclusive, and measured on the correction", () => {
+  const at = PL.syncCorrection(SPANS, { uri: "spotify:track:b", positionSec: 75 }, 150);
+  assert.equal(at.by ?? at.to - 150, 25, "a correction of exactly 25s");
+  assert.equal(at.diagnosis, null, "exactly 25s is not yet drift");
+
+  const past = PL.syncCorrection(SPANS, { uri: "spotify:track:b", positionSec: 75.1 }, 150);
   assert.equal(past.diagnosis, "orderDrift");
 });
 

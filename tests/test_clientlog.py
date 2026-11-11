@@ -180,6 +180,39 @@ class TestDegradeAndFailure(unittest.TestCase):
         self.assertEqual(len(found), 1)
         self.assertIn("Something threw", found[0].message)
 
+    def test_a_failed_forced_linear_step_is_HIGH(self):
+        found = by_code([entry("linearFail", step="shuffle", msg="403 Forbidden")],
+                        "linear-fail")
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].severity, clientlog.HIGH)
+        self.assertIn("shuffle", found[0].message)
+        self.assertIn("quirk 4", found[0].rule)
+
+    def test_a_clean_shuffle_report_is_only_informational(self):
+        found = by_code([entry("shuffleState", observed={"shuffle_state": False},
+                               repeat="off")], "shuffle-state")
+        self.assertEqual(found[0].severity, clientlog.INFO)
+
+    def test_shuffle_still_on_after_the_sequence_is_a_warning(self):
+        found = by_code([entry("shuffleState", observed={"shuffle_state": True})],
+                        "shuffle-state")
+        self.assertEqual(found[0].severity, clientlog.WARN)
+
+    def test_an_undocumented_shuffle_field_is_called_out(self):
+        """Smart shuffle is a third state the OpenAPI spec does not describe. We do not
+        guess its field name - we record whatever Spotify sends and flag anything beyond
+        the documented `shuffle_state`."""
+        found = by_code([entry("shuffleState",
+                               observed={"shuffle_state": False, "smart_shuffle": True})],
+                        "shuffle-state")
+        self.assertEqual(found[0].severity, clientlog.WARN)
+        self.assertIn("does not document", found[0].message)
+        self.assertIn("smart_shuffle", found[0].message)
+
+    def test_no_shuffle_field_at_all_is_reported_plainly(self):
+        found = by_code([entry("shuffleState", observed={})], "shuffle-state")
+        self.assertIn("no shuffle field at all", found[0].message)
+
     def test_an_in_app_run_with_no_ready_event_is_flagged(self):
         """The 6s device-id race in beginPlayback was lost."""
         found = by_code([entry("begin", target="sdk", streamScope=True)], "no-ready")

@@ -26,13 +26,13 @@
   /* Bumped whenever this module's interface changes, so a page can refuse to boot
    * against a stale cached copy rather than failing mid-workout. Checked against each
    * page's NEEDS_SYNC by scripts/check.py. */
-  const SYNC_VERSION = 1;
+  const SYNC_VERSION = 2;
 
   /* Tuned values, not measured ones, and deliberately NOT parameters: a per-call-site
    * knob is how the tuning gets lost. Each is the value the three previous copies all
    * used. docs/DEVELOPING.md Hotspots 6. */
   const SNAP_SEC = 2.5;        // above this the gap is a real seek or skip, so jump
-  const ORDER_DRIFT_SEC = 25;  // matched a span this far off: playback order looks wrong
+  const ORDER_DRIFT_SEC = 25;  // a correction this large means the timeline has diverged
   const SLEW_RATE = 0.12;      // max 12% clock rate while absorbing, so no visible flicker
 
   /* Build the span list for a track list: each track's stretch of the timeline, laid
@@ -85,23 +85,34 @@
    * collapsing them would make the SDK path emit a shuffle warning every time the
    * player blinked.
    *
-   * diagnosis is otherwise null, or "orderDrift" when the nearest matching span is far
-   * enough from the clock that playback order probably does not match the timeline. That
-   * one is reported ALONGSIDE the correction rather than instead of it, because the
-   * correction is still worth applying. Surfacing any of them is the caller's decision.
+   * diagnosis is otherwise null, or "orderDrift" when the required correction is large
+   * enough that the audio and the timeline have genuinely diverged - a shuffled or
+   * skipped track rather than ordinary drift. It is reported ALONGSIDE the correction
+   * rather than instead of it, because the correction is still worth applying.
+   * Surfacing any of them is the caller's decision.
    */
   function syncCorrection(spans, observed, clockT) {
     const o = observed || {};
     if (!o.uri) return { action: "none", diagnosis: "noUri" };
 
-    const { index, distanceSec } = matchSpan(spans, o.uri, clockT);
+    const { index } = matchSpan(spans, o.uri, clockT);
     if (index < 0) return { action: "none", diagnosis: "noMatch" };
 
-    const diagnosis = distanceSec > ORDER_DRIFT_SEC ? "orderDrift" : null;
     const serverT = spans[index].start
       + (Number.isFinite(o.positionSec) ? o.positionSec : 0)
       + (Number.isFinite(o.rttSec) ? o.rttSec : 0) / 2;
     const delta = serverT - clockT;
+
+    /* Order drift is judged on the size of the CORRECTION, not on how far the clock sits
+       from the matched span's start.
+       The inline copies used `distanceSec > 25`, which is the distance from the clock to
+       the start of the track being played - so it was true of any correctly-ordered
+       playthrough more than 25s into a track, and the warning fired on healthy runs. It
+       went largely unnoticed because the three warnings shared one latch and the
+       start-up shuffle read-back usually claimed it first.
+       What actually means "the audio and the timeline have diverged" is a correction
+       this large. ORDER_DRIFT_SEC > SNAP_SEC, so this always accompanies a snap. */
+    const diagnosis = Math.abs(delta) > ORDER_DRIFT_SEC ? "orderDrift" : null;
 
     return Math.abs(delta) > SNAP_SEC
       ? { action: "snap", to: serverT, diagnosis }
