@@ -1106,15 +1106,32 @@ function setPaused(pause){
    poll - go through here, so the in-app path now reports order drift and stray tracks
    too. It previously reported neither: on no match it returned silently, which is why
    a shuffled in-app workout gave no indication at all. */
+/* Record the first live-sync verdict of each kind, once per run. This is the only
+   direct measurement of whether the audio is actually in timeline order.
+   `shuffle_state` is a flag ABOUT the player, not evidence about the queue: a run was
+   reported where the order warning fired while the playlist played correctly, and
+   another where shuffle read as on after play with no audible problem. So stop
+   inferring order from the flag and log what live sync actually observes. */
+function logSyncOnce(kind,extra){
+  if(!W)return;
+  W.diagLogged=W.diagLogged||{};
+  if(W.diagLogged[kind])return;
+  W.diagLogged[kind]=true;
+  clog("syncDiag",{diagnosis:kind,...(extra||{})});
+}
 function applySync(dec){
   if(dec.diagnosis==="noUri")return;          // player blinked between tracks
   if(dec.diagnosis==="noMatch"){
+    logSyncOnce("noMatch");
     if(W&&!W.warned.noMatch){W.warned.noMatch=true;
       toast("Spotify is playing a track that isn't in this workout — shuffle may be on",6000)}
     return;
   }
-  if(dec.diagnosis==="orderDrift"&&W&&!W.warned.order){W.warned.order=true;
-    toast("Playback order doesn't match the timeline — check that shuffle is off in Spotify",6000)}
+  if(dec.diagnosis==="orderDrift"){
+    logSyncOnce("orderDrift",{action:dec.action});
+    if(W&&!W.warned.order){W.warned.order=true;
+      toast("Playback order doesn't match the timeline — check that shuffle is off in Spotify",6000)}
+  }else logSyncOnce("inOrder");
   if(dec.action==="snap"){P.t=dec.to;P.slew=0;P.last=performance.now()}
   else if(dec.action==="slew")P.slew=dec.by;
 }

@@ -229,12 +229,16 @@ def findings(records, bad=()):
                 "landed, and the single retry did not catch it either.",
                 rule="spotify-api.md quirk 4", evidence=ev))
         else:
+            # Deliberately WARN, not HIGH. shuffle_state is a flag ABOUT the player, not
+            # evidence about the queue: a run was reported where the order warning fired
+            # while the playlist played correctly. The syncDiag findings below are the
+            # direct measurement, and they decide whether this matters.
             out.append(Finding(
-                HIGH, "shuffle-reenabled-by-play",
-                "The forced-linear sequence DID turn shuffle off, and starting playback "
-                "turned it back on. Per quirk 4 this cannot be fixed by re-applying "
-                "shuffle afterwards, because that does not reorder the queue - the "
-                "context_uri start is what reintroduces it.",
+                WARN, "shuffle-reenabled-by-play",
+                "Shuffle read as off before play and on after it, so starting playback "
+                "re-enabled the flag. Per quirk 4 that cannot be undone afterwards. "
+                "Whether the QUEUE is actually out of order is a separate question - see "
+                "the live-sync verdict.",
                 rule="spotify-api.md quirk 4", evidence=ev))
 
     for rec in _of_type(records, "shuffleRetry"):
@@ -243,6 +247,26 @@ def findings(records, bad=()):
             "Shuffle had not taken by the time it was checked, so it was re-applied "
             "before play. Expected occasionally; the setting propagates asynchronously.",
             evidence=[{"t": _when(rec)}]))
+
+    # --- what live sync actually observed: the only direct evidence of track order ---
+    diag = {r.get("diagnosis"): r for r in _of_type(records, "syncDiag")}
+    if "orderDrift" in diag or "noMatch" in diag:
+        kinds = [k for k in ("noMatch", "orderDrift") if k in diag]
+        out.append(Finding(
+            HIGH, "order-actually-wrong",
+            "Live sync observed %s: the audio really was not following the timeline."
+            % " and ".join(kinds),
+            rule="spotify-api.md quirk 4",
+            evidence=[{"diagnosis": k, "t": _when(diag[k])} for k in kinds]))
+    elif "inOrder" in diag:
+        out.append(Finding(
+            INFO, "order-confirmed",
+            "Live sync matched the playing track to the expected span, so the audio "
+            "followed the timeline%s."
+            % (" despite shuffle_state reading as on"
+               if any(bool((r.get("observed") or {}).get("shuffle_state"))
+                      for r in post) else ""),
+            evidence=[{"t": _when(diag["inOrder"])}]))
 
     # --- a success whose body would not parse ----------------------------------------
     for rec in _of_type(records, "apiBody"):

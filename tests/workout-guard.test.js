@@ -302,12 +302,16 @@ test("the absence of an api log entry means the response was fine", async () => 
  * effects can be exercised without a browser. */
 function freshApply() {
   const toasts = [];
+  const logged = [];
   const W = { warned: { shuffle: false, noMatch: false, order: false } };
   const P = { t: 100, slew: 0, last: 0 };
-  const factory = new Function("W", "P", "toast", "performance",
-    extractFunction("applySync") + "\nreturn applySync;");
-  return { applySync: factory(W, P, (m) => toasts.push(m), { now: () => 12345 }),
-           W, P, toasts };
+  // applySync records its verdict through logSyncOnce, so both come across together.
+  const factory = new Function("W", "P", "toast", "performance", "clog",
+    extractFunction("logSyncOnce") + "\n" + extractFunction("applySync")
+    + "\nreturn applySync;");
+  const applySync = factory(W, P, (m) => toasts.push(m), { now: () => 12345 },
+    (type, data) => logged.push({ type, data }));
+  return { applySync, W, P, toasts, logged };
 }
 
 test("a noUri decision changes nothing and says nothing", () => {
@@ -370,12 +374,32 @@ test("the warning latches are independent of each other", () => {
 
 test("applySync tolerates W being cleared mid-flight", () => {
   // backToSplash() sets W = null, and a poll response can land after that.
-  const factory = new Function("W", "P", "toast", "performance",
-    extractFunction("applySync") + "\nreturn applySync;");
+  const factory = new Function("W", "P", "toast", "performance", "clog",
+    extractFunction("logSyncOnce") + "\n" + extractFunction("applySync")
+    + "\nreturn applySync;");
   const P = { t: 100, slew: 0, last: 0 };
-  const applySync = factory(null, P, () => {}, { now: () => 1 });
+  const applySync = factory(null, P, () => {}, { now: () => 1 }, () => {});
   assert.doesNotThrow(() => applySync({ action: "none", diagnosis: "noMatch" }));
   assert.doesNotThrow(() => applySync({ action: "snap", to: 5, diagnosis: "orderDrift" }));
+  assert.doesNotThrow(() => applySync({ action: "slew", by: 1, diagnosis: null }));
+});
+
+test("applySync records the live-sync verdict once per kind", () => {
+  // The only direct evidence of whether the audio followed the timeline.
+  const { applySync, logged } = freshApply();
+  applySync({ action: "slew", by: 0.2, diagnosis: null });
+  applySync({ action: "slew", by: 0.3, diagnosis: null });
+  assert.deepEqual(logged.map(l => [l.type, l.data.diagnosis]), [["syncDiag", "inOrder"]]);
+
+  applySync({ action: "snap", to: 200, diagnosis: "orderDrift" });
+  applySync({ action: "snap", to: 210, diagnosis: "orderDrift" });
+  assert.deepEqual(logged.map(l => l.data.diagnosis), ["inOrder", "orderDrift"]);
+});
+
+test("applySync does not record a verdict for a player blink", () => {
+  const { applySync, logged } = freshApply();
+  applySync({ action: "none", diagnosis: "noUri" });
+  assert.deepEqual(logged, []);
 });
 
 /* ---- the boot gate must be reachable ---- */

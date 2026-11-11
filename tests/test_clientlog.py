@@ -227,14 +227,20 @@ class TestDegradeAndFailure(unittest.TestCase):
 
     def test_shuffle_off_before_play_and_on_after_blames_play(self):
         """quirk 4: setting shuffle after play does not reorder the queue, so this
-        verdict and the next one need completely different fixes."""
+        verdict and the next one need completely different fixes.
+
+        WARN rather than HIGH, deliberately: shuffle_state is a flag about the player and
+        says nothing on its own about whether the queue is in timeline order. A real run
+        showed the order warning firing while the playlist played correctly. Only a
+        live-sync verdict can turn this into an alarm."""
         found = by_code([
             entry("shuffleState", t=1, when="before-play", observed={"shuffle_state": False}),
             entry("shuffleState", t=2, when="after-play", observed={"shuffle_state": True}),
         ], "shuffle-reenabled-by-play")
         self.assertEqual(len(found), 1)
-        self.assertEqual(found[0].severity, clientlog.HIGH)
-        self.assertIn("turned it back on", found[0].message)
+        self.assertEqual(found[0].severity, clientlog.WARN)
+        self.assertIn("re-enabled the flag", found[0].message)
+        self.assertIn("separate question", found[0].message)
 
     def test_shuffle_on_before_AND_after_blames_the_ignored_call(self):
         found = by_code([
@@ -273,6 +279,48 @@ class TestDegradeAndFailure(unittest.TestCase):
                                observed={"shuffle_state": True})], "shuffle-state")
         self.assertEqual(found[0].severity, clientlog.INFO)
         self.assertIn("before-play", found[0].message)
+
+    def test_live_sync_confirming_order_is_the_direct_evidence(self):
+        """shuffle_state is a flag ABOUT the player; whether the queue is in timeline
+        order is a different question, and live sync is the only thing that measures it.
+        A run was reported where the order warning fired while the playlist played
+        correctly, so the flag must not be treated as proof either way."""
+        records = [
+            entry("shuffleState", t=1, when="before-play", observed={"shuffle_state": False}),
+            entry("shuffleState", t=2, when="after-play", observed={"shuffle_state": True}),
+            entry("syncDiag", t=3, diagnosis="inOrder"),
+        ]
+        found = by_code(records, "order-confirmed")
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].severity, clientlog.INFO)
+        self.assertIn("despite shuffle_state reading as on", found[0].message)
+        # And the flag finding is a warning, not an alarm.
+        self.assertEqual(by_code(records, "shuffle-reenabled-by-play")[0].severity,
+                         clientlog.WARN)
+
+    def test_live_sync_observing_drift_is_HIGH(self):
+        found = by_code([entry("syncDiag", diagnosis="orderDrift", action="snap")],
+                        "order-actually-wrong")
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].severity, clientlog.HIGH)
+        self.assertIn("really was not following the timeline", found[0].message)
+
+    def test_a_stray_track_is_also_order_actually_wrong(self):
+        found = by_code([entry("syncDiag", diagnosis="noMatch")], "order-actually-wrong")
+        self.assertEqual(found[0].severity, clientlog.HIGH)
+        self.assertIn("noMatch", found[0].message)
+
+    def test_drift_outranks_a_confirmation_from_earlier_in_the_run(self):
+        records = [entry("syncDiag", t=1, diagnosis="inOrder"),
+                   entry("syncDiag", t=2, diagnosis="orderDrift")]
+        self.assertEqual(by_code(records, "order-confirmed"), [])
+        self.assertEqual(len(by_code(records, "order-actually-wrong")), 1)
+
+    def test_no_sync_verdict_at_all_draws_no_conclusion(self):
+        """A simulated run, or one cancelled before sync ever ran."""
+        records = [entry("begin", target="sdk", streamScope=True)]
+        self.assertEqual(by_code(records, "order-confirmed"), [])
+        self.assertEqual(by_code(records, "order-actually-wrong"), [])
 
     def test_a_retry_is_recorded(self):
         found = by_code([entry("shuffleRetry")], "shuffle-retried")
