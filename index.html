@@ -433,7 +433,10 @@ async function startLogin(){
   LSD.set("verifier",verifier);
   const challenge=b64url(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(verifier)));
   const p=new URLSearchParams({client_id:AUTH.clientId,response_type:"code",redirect_uri:AUTH.redirectUri,
-    scope:"playlist-read-private playlist-read-collaborative playlist-modify-public playlist-modify-private user-read-playback-state user-modify-playback-state",
+    /* One login serves every page on this device (they share pl_tok), so request the
+       union: streaming + user-read-email + user-read-private are what workout.html's
+       in-app player needs. An editor login without them silently broke in-app playback. */
+    scope:"playlist-read-private playlist-read-collaborative playlist-modify-public playlist-modify-private user-read-playback-state user-modify-playback-state streaming user-read-email user-read-private",
     code_challenge_method:"S256",code_challenge:challenge});
   await Store.flush();                       // verifier + client ID must survive the redirect
   location.href="https://accounts.spotify.com/authorize?"+p;
@@ -469,7 +472,13 @@ async function refreshToken(){
     for(let a=0;a<4;a++){
       try{await tokenRequest({grant_type:"refresh_token",refresh_token:t.refresh,client_id:AUTH.clientId});
         return AUTH.tok.access}
-      catch(e){last=e;if(e.auth)throw e;await new Promise(r=>setTimeout(r,[400,1200,3000][a]||3000))}
+      catch(e){
+        last=e;
+        /* another page on this origin may have rotated the refresh token first: that's
+           a lost race, not a dead session, so don't let boot wipe the login over it */
+        if(e.auth){const cur=AUTH.tok;if(cur&&cur.refresh&&cur.refresh!==t.refresh)return cur.access;throw e}
+        await new Promise(r=>setTimeout(r,[400,1200,3000][a]||3000));
+      }
     }
     throw last||new Error("token refresh failed");
   })().finally(()=>{refreshPromise=null});

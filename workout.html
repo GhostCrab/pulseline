@@ -340,7 +340,8 @@ const b64url=b=>btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,"-
 async function tokenRequest(body){
   const r=await fetch("https://accounts.spotify.com/api/token",{method:"POST",
     headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams(body)});
-  if(!r.ok)throw new Error("Spotify login failed ("+r.status+")");
+  if(!r.ok){const err=new Error("Spotify login failed ("+r.status+")");
+    err.fatal=(r.status===400||r.status===401);throw err}   // only 400/401 mean the session is dead
   const j=await r.json();
   AUTH.tok={access:j.access_token,refresh:j.refresh_token||(AUTH.tok&&AUTH.tok.refresh),
     scope:j.scope||(AUTH.tok&&AUTH.tok.scope)||"",exp:Date.now()+(j.expires_in-60)*1000};
@@ -354,11 +355,37 @@ async function login(){
     scope:"playlist-read-private playlist-read-collaborative user-read-playback-state user-modify-playback-state streaming user-read-email user-read-private",
     code_challenge_method:"S256",code_challenge:challenge});
 }
-async function ensureToken(){
-  const t=AUTH.tok;if(!t)throw new Error("Not connected");
-  if(Date.now()<t.exp)return t.access;
-  await tokenRequest({grant_type:"refresh_token",refresh_token:t.refresh,client_id:AUTH.clientId});
-  return AUTH.tok.access;
+/* Single-flight refresh, ported from index.html. Spotify rotates the refresh token on
+   every refresh, so two overlapping refreshes (SDK getOAuthToken, a poll, reviveSession)
+   would spend the same token twice and the loser gets a 400. Other pages on this origin
+   share the token too: if a 400 arrives but another tab has already stored a newer
+   refresh token, that is a lost race, not a dead session. */
+let refreshPromise=null;
+const SKEW_MS=120000;
+function refreshToken(){
+  if(refreshPromise)return refreshPromise;
+  refreshPromise=(async()=>{
+    const t=AUTH.tok;
+    if(!t||!t.refresh){const e=new Error("Not connected");e.fatal=true;throw e}
+    let last=null;
+    for(let a=0;a<4;a++){
+      try{await tokenRequest({grant_type:"refresh_token",refresh_token:t.refresh,client_id:AUTH.clientId});
+        return AUTH.tok.access}
+      catch(e){
+        last=e;
+        if(e.fatal){const cur=AUTH.tok;if(cur&&cur.refresh&&cur.refresh!==t.refresh)return cur.access;throw e}
+        await new Promise(r=>setTimeout(r,[400,1200,3000][a]||3000));
+      }
+    }
+    throw last||new Error("token refresh failed");
+  })().finally(()=>{refreshPromise=null});
+  return refreshPromise;
+}
+async function ensureToken(force){
+  const t=AUTH.tok;
+  if(!t){const e=new Error("Not connected");e.fatal=true;throw e}
+  if(!force&&Date.now()<t.exp-SKEW_MS)return t.access;
+  return refreshToken();
 }
 /* Network state, surfaced instead of silently failing. */
 let netDown=false;
@@ -443,19 +470,31 @@ function setTarget(t){
   target=t;LSD.set("target",t);
   $("#tgtSdk").className="bigbtn"+(t==="sdk"?" on":"");
   $("#tgtConnect").className="bigbtn"+(t==="connect"?" on":"");
+  /* A login made without the "streaming" permission (e.g. from an older editor) can't
+     play in-app. Say so and offer the fix. Never silently switch to "Spotify app"
+     mode: that plays on some other device while the badge reads LIVE. */
+  if(t==="sdk"&&!hasStreamScope()){
+    $("#tgtNote").innerHTML='<b style="color:var(--alert)">In-app playback needs you to reconnect Spotify</b>'
+      +' (this login is missing the "streaming" permission). '
+      +'<button class="bigbtn" id="reauthBtn" style="margin-top:8px">Reconnect Spotify</button>';
+    $("#reauthBtn").onclick=()=>login();
+    return;
+  }
   $("#tgtNote").textContent=t==="sdk"
     ?"Audio plays from this app — keep the screen on (it stays awake automatically). Nothing else to open."
     :"Audio plays on whatever device Spotify is active on. Open the Spotify app first.";
   if(t==="sdk")initSdk();
 }
-$("#tgtSdk").onclick=()=>{
-  if(!hasStreamScope()){
-    if(confirm("Playing in-app needs one extra Spotify permission. Log in again to grant it?"))login();
-    return;
-  }
-  setTarget("sdk");
-};
+$("#tgtSdk").onclick=()=>setTarget("sdk");
 $("#tgtConnect").onclick=()=>setTarget("connect");
+/* In-app audio has failed: never leave the badge saying live over silence. */
+let sdkErrTimes=[];
+function sdkFail(msg){
+  if(!W||!W.live||target!=="sdk"){toast(msg,6000);return}
+  W.live=false;$("#liveTag").textContent="SIMULATED";$("#liveTag").className="sim";
+  if(sdk)sdk.pause().catch(()=>{});            // stop it skipping through the playlist
+  toast(msg+" — running simulated. Switch to 'Spotify app' or reconnect.",7000);
+}
 function initSdk(){
   if(sdkReady||!window.Spotify||!hasStreamScope())return sdkReady;
   sdkReady=new Promise(resolve=>{
@@ -463,12 +502,25 @@ function initSdk(){
     sdk.addListener("ready",({device_id})=>{sdkId=device_id;resolve(device_id)});
     sdk.addListener("not_ready",()=>{sdkId=null;netBad()});
     sdk.addListener("ready",()=>{netOK()});
-    sdk.addListener("initialization_error",({message})=>{toast("Player init failed: "+message,5000);resolve(null)});
-    sdk.addListener("authentication_error",({message})=>{toast("Player auth failed — try logging in again",5000);resolve(null)});
-    sdk.addListener("account_error",()=>{toast("In-app playback needs Spotify Premium",5000);resolve(null)});
+    sdk.addListener("initialization_error",({message})=>{resolve(null);sdkFail("In-app player couldn't start ("+message+")")});
+    sdk.addListener("authentication_error",({message})=>{resolve(null);sdkFail("In-app player rejected the login ("+message+") — reconnect Spotify")});
+    sdk.addListener("account_error",()=>{resolve(null);sdkFail("In-app playback needs Spotify Premium")});
+    /* The play command returns 204 even when the player can't produce audio; these
+       events are the only report of it. One playback_error can be a single unplayable
+       track (the SDK skips it). Several in quick succession means no audio at all:
+       a bad login skips through the whole playlist this way. */
+    sdk.addListener("playback_error",({message})=>{
+      const now=Date.now();
+      sdkErrTimes=sdkErrTimes.filter(x=>now-x<15000);sdkErrTimes.push(now);
+      if(sdkErrTimes.length>=2)sdkFail("Spotify can't play audio in this app ("+message+")");
+      else toast("Spotify couldn't play a track ("+message+")",4000);
+    });
+    sdk.addListener("autoplay_failed",()=>{
+      toast("iOS blocked the audio from starting — tap PAUSE, then RESUME",6000);
+    });
     /* real-time sync: fires on every play/pause/seek/track change — no polling */
     sdk.addListener("player_state_changed",st=>{
-      if(!st||!W||target!=="sdk")return;
+      if(!st||!W||!W.live||target!=="sdk")return;
       if(!P.started)return;                       // still armed at 0:00, waiting for START
       if(st.paused&&P.playing&&!st.loading){setPaused(true);return}
       if(!st.paused&&!P.playing){setPaused(false);return}   // resumed from headphones/lock screen
@@ -876,7 +928,9 @@ async function beginPlayback(){          // called from the START tap (a user ge
   try{
     let q="",devId=null;
     if(target==="sdk"){
+      if(!hasStreamScope())throw new Error("this login can't play in-app — tap Reconnect Spotify on the start screen");
       if(sdk){try{await sdk.activateElement()}catch(e){}}   // iOS unlock, inside the gesture
+      sdkErrTimes=[];
       const id=await Promise.race([initSdk()||Promise.resolve(null),
         new Promise(r=>setTimeout(()=>r(sdkId),6000))]);
       if(!id)throw new Error("in-app player unavailable");
@@ -1210,7 +1264,7 @@ function draw(){
     }
     initShuffleToggle();
     $("#targetBox").style.display="block";
-    setTarget(hasStreamScope()?target:"connect");
+    setTarget(target);         // keep the chosen target; setTarget explains if the login can't do it
     renderSplash();
   }catch(e){
     $("#who").textContent="Connection problem: "+e.message;
