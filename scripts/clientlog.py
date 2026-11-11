@@ -26,13 +26,21 @@ can gate a human-in-the-loop verification pass.
 """
 import argparse
 import collections
+import glob
 import json
 import os
 import sys
+import time
 
 # A chosen window, not a measured one: it mirrors the 15s pairing threshold
 # workout.html uses to decide the in-app player is failing rather than hiccupping.
 PLAYBACK_ERROR_WINDOW_MS = 15_000
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# A chosen value, not a measured one: entries further apart than this are treated as
+# separate workouts. One log accumulates every run ever made on that account.
+SESSION_GAP_MS = 10 * 60 * 1000
 
 # SDK events that mean something specific went wrong, and what each one actually means.
 # Sourced from docs/agents/spotify-api.md quirk 9 and workout.html's own listeners.
@@ -246,19 +254,76 @@ def summarise(records):
 SEV_ORDER = {HIGH: 0, WARN: 1, INFO: 2}
 
 
-def report(path, as_json=False):
+def find_logs(data_dir=None):
+    """Every live client log, newest first. Rotated `.1` files are left out: they are
+    the previous generation and `append_log` keeps only one."""
+    d = data_dir or os.path.join(ROOT, "data")
+    paths = glob.glob(os.path.join(d, "clientlog-*.jsonl"))
+    return sorted(paths, key=lambda p: os.path.getmtime(p), reverse=True)
+
+
+def split_sessions(records, gap_ms=SESSION_GAP_MS):
+    """Group entries into sessions, splitting wherever the clock jumps by more than
+    gap_ms. A log accumulates across every workout ever run on that account, so without
+    this a report mixes last week's findings into today's."""
+    ordered = sorted(records, key=_when)
+    sessions, current, last = [], [], None
+    for rec in ordered:
+        t = _when(rec)
+        if last is not None and t and last and t - last > gap_ms:
+            sessions.append(current)
+            current = []
+        current.append(rec)
+        last = t or last
+    if current:
+        sessions.append(current)
+    return sessions
+
+
+def _age(seconds):
+    if seconds < 90:
+        return "%ds ago" % int(seconds)
+    if seconds < 5400:
+        return "%dm ago" % round(seconds / 60)
+    if seconds < 172800:
+        return "%.1fh ago" % (seconds / 3600)
+    return "%dd ago" % round(seconds / 86400)
+
+
+def _window(records):
+    times = [_when(r) for r in records if _when(r)]
+    if not times:
+        return "unknown time"
+    span = (max(times) - min(times)) / 1000
+    when = _age(max(0, time.time() - max(times) / 1000))
+    return "%s, lasting %dm %02ds" % (when, span // 60, span % 60)
+
+
+def report(path, as_json=False, scope="last"):
     with open(path, encoding="utf-8", errors="replace") as f:
         records, bad = parse_lines(f.read())
-    found = sorted(findings(records, bad), key=lambda f_: SEV_ORDER[f_.severity])
-    summary = summarise(records)
+
+    sessions = split_sessions(records)
+    if scope == "last" and len(sessions) > 1:
+        chosen, note = sessions[-1], ("latest of %d sessions in this log; "
+                                      "--all to report every one" % len(sessions))
+    else:
+        chosen, note = records, ("all %d session(s)" % max(1, len(sessions)))
+
+    found = sorted(findings(chosen, bad), key=lambda f_: SEV_ORDER[f_.severity])
+    summary = summarise(chosen)
 
     if as_json:
-        print(json.dumps({"file": path, "summary": summary,
+        print(json.dumps({"file": path, "scope": scope, "sessions": len(sessions),
+                          "summary": summary,
                           "findings": [f_.as_dict() for f_ in found]}, indent=2))
     else:
-        print("%s - %d entries, %d unreadable" % (path, summary["entries"], len(bad)))
+        print("%s" % rel(path))
+        print("  %s - %s" % (_window(chosen), note))
+        print("  %d entries, %d unreadable" % (summary["entries"], len(bad)))
         if summary["types"]:
-            print("  events: " + ", ".join("%s x%d" % kv for kv in sorted(summary["types"].items())))
+            print("  events: " + ", ".join("%s x%d" % kv
+                                           for kv in sorted(summary["types"].items())))
         print()
         for f_ in found:
             print("[%s] %s" % (f_.severity, f_.message))
@@ -273,16 +338,54 @@ def report(path, as_json=False):
     return 1 if any(f_.severity == HIGH for f_ in found) else 0
 
 
+def rel(path):
+    try:
+        return os.path.relpath(path, ROOT).replace(os.sep, "/")
+    except ValueError:
+        return path
+
+
 def main():
-    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("path", help="path to a clientlog-<ns>.jsonl file")
+    ap = argparse.ArgumentParser(
+        description="Report what a real device saw, from its client diagnostics log.",
+        epilog="With no arguments: the newest log in data/, latest session only.")
+    ap.add_argument("path", nargs="?",
+                    help="a clientlog-<ns>.jsonl file (default: the newest in data/)")
+    ap.add_argument("--all", action="store_true",
+                    help="report every session in the log, not just the latest")
+    ap.add_argument("--list", action="store_true", help="list the logs that exist")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args()
-    if not os.path.exists(args.path):
-        print("no such file: %s" % args.path, file=sys.stderr)
-        sys.exit(2)
-    sys.exit(report(args.path, args.json))
+
+    logs = find_logs()
+
+    if args.list:
+        if not logs:
+            print("no logs in %s" % os.path.join(ROOT, "data"))
+            return 0
+        for p in logs:
+            recs, _ = parse_lines(open(p, encoding="utf-8", errors="replace").read())
+            print("%-44s %7d entries  %2d session(s)  %s"
+                  % (rel(p), len(recs), len(split_sessions(recs)),
+                     _age(max(0, time.time() - os.path.getmtime(p)))))
+        return 0
+
+    path = args.path or (logs[0] if logs else None)
+    if not path:
+        print("No client log found in %s" % os.path.join(ROOT, "data"), file=sys.stderr)
+        print("", file=sys.stderr)
+        print("The log is written by whichever server served the page. If the workout",
+              file=sys.stderr)
+        print("ran against production it is on the Pi at /opt/pulseline/data/ - copy one",
+              file=sys.stderr)
+        print("down, or pass a path explicitly.", file=sys.stderr)
+        return 2
+    if not os.path.exists(path):
+        print("no such file: %s" % path, file=sys.stderr)
+        return 2
+
+    return report(path, args.json, "all" if args.all else "last")
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

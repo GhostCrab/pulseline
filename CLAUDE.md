@@ -10,7 +10,7 @@ Pulseline lines up a Spotify playlist against a programmed interval workout. No 
 python3 server.py                   # local server: open http://127.0.0.1:8888/ (not localhost: Spotify's redirect URI must match exactly)
 python3 scripts/check.py            # all mechanical checks; ESLint included after `npm install`
 python3 scripts/test.py             # behaviour tests (state API, analysis-core, clientlog reader)
-python3 scripts/clientlog.py data/clientlog-<ns>.jsonl   # what a real device saw
+python3 scripts/clientlog.py          # what a real device saw (newest log, latest session)
 bash scripts/hitl-workout.sh        # guided device pass for the playback path
 git config core.hooksPath .githooks # once per clone: run check.py + test.py on every commit
 ```

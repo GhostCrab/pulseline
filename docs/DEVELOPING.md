@@ -258,10 +258,16 @@ exact. The contract suite above covers the remaining question a live call would 
 
 ### Verifying the playback path, which tier 3 cannot reach
 
-`scripts/clientlog.py` reads `data/clientlog-<ns>.jsonl` and reports what a device
-actually saw — the missing-`streaming`-scope signature, paired `playback_error` events,
-each named SDK failure, terminal API failures. It exits non-zero on a high-severity
-finding. This is the only route to evidence about in-app audio, because quirk 9 means
+`scripts/clientlog.py` reports what a device actually saw. Run it with **no arguments**
+and it picks the newest log in `data/` and reports only the **latest session**, because one
+log accumulates every workout ever run on that account and you almost always mean the one
+you just did. `--all` reports every session, `--list` shows what logs exist, `--json` for
+machine output, or pass a path explicitly.
+
+It recognises the missing-`streaming`-scope signature, paired `playback_error` events,
+each named SDK failure, a failed step of the forced-linear sequence, whatever Spotify
+actually reported about shuffle, contained run-loop throws, and terminal API failures.
+It exits non-zero on a high-severity finding. This is the only route to evidence about in-app audio, because quirk 9 means
 the API reports success throughout a silent failure.
 
 `scripts/hitl-workout.sh` drives *you* through the full sequence the standards require

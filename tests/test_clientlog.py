@@ -339,5 +339,87 @@ class TestCli(unittest.TestCase):
         self.assertEqual(self.report(as_json=True), 0)
 
 
+class TestDiscoveryAndSessions(unittest.TestCase):
+    """`python scripts/clientlog.py` with no arguments has to pick the right file and
+    the right slice of it, or the report describes a workout you are not asking about."""
+
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.mkdtemp(prefix="pulseline-logs-")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def write(self, name, text="", mtime=None):
+        path = os.path.join(self.dir, name)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        if mtime is not None:
+            os.utime(path, (mtime, mtime))
+        return path
+
+    def test_logs_come_back_newest_first(self):
+        import time
+        now = time.time()
+        self.write("clientlog-u_old.jsonl", mtime=now - 9000)
+        self.write("clientlog-u_new.jsonl", mtime=now - 10)
+        self.write("clientlog-u_mid.jsonl", mtime=now - 3000)
+        got = [os.path.basename(p) for p in clientlog.find_logs(self.dir)]
+        self.assertEqual(got, ["clientlog-u_new.jsonl", "clientlog-u_mid.jsonl",
+                              "clientlog-u_old.jsonl"])
+
+    def test_rotated_generations_are_not_offered(self):
+        """append_log rotates to `.1` and keeps only one; the live file is what we want."""
+        self.write("clientlog-u_a.jsonl")
+        self.write("clientlog-u_a.jsonl.1")
+        got = [os.path.basename(p) for p in clientlog.find_logs(self.dir)]
+        self.assertEqual(got, ["clientlog-u_a.jsonl"])
+
+    def test_no_logs_is_an_empty_list_not_an_error(self):
+        self.assertEqual(clientlog.find_logs(self.dir), [])
+
+    def test_entries_far_apart_are_separate_sessions(self):
+        gap = clientlog.SESSION_GAP_MS
+        records = [entry("begin", t=1000), entry("sdk", t=2000),
+                   entry("begin", t=2000 + gap + 1), entry("sdk", t=2000 + gap + 2000)]
+        sessions = clientlog.split_sessions(records)
+        self.assertEqual([len(s) for s in sessions], [2, 2])
+
+    def test_one_continuous_workout_is_one_session(self):
+        records = [entry("begin", t=1000 + i * 5000) for i in range(12)]
+        self.assertEqual(len(clientlog.split_sessions(records)), 1)
+
+    def test_entries_are_ordered_before_splitting(self):
+        """clog() queues entries in memory until the namespace is known, so a log is not
+        guaranteed to be in time order."""
+        gap = clientlog.SESSION_GAP_MS
+        records = [entry("sdk", t=2000 + gap + 2000), entry("begin", t=1000),
+                   entry("begin", t=2000 + gap + 1), entry("sdk", t=2000)]
+        sessions = clientlog.split_sessions(records)
+        self.assertEqual([len(s) for s in sessions], [2, 2])
+        self.assertEqual([_w(r) for r in sessions[0]], [1000, 2000])
+
+    def test_the_default_scope_ignores_an_earlier_bad_session(self):
+        """The whole point: a log accumulates every workout ever run on that account, so
+        a bare invocation must not report last week's failure as though it were today's."""
+        gap = clientlog.SESSION_GAP_MS
+        bad = [entry("begin", t=1000, target="sdk", streamScope=False)]
+        good = [entry("begin", t=1000 + gap + 1, target="sdk", streamScope=True),
+                entry("sdk", t=1000 + gap + 500, ev="ready")]
+        path = self.write("clientlog-u_x.jsonl", jsonl(*(bad + good)))
+
+        import contextlib, io
+        with contextlib.redirect_stdout(io.StringIO()):
+            last = clientlog.report(path, as_json=True, scope="last")
+            every = clientlog.report(path, as_json=True, scope="all")
+        self.assertEqual(last, 0, "the latest session is clean")
+        self.assertEqual(every, 1, "--all still finds the earlier failure")
+
+
+def _w(rec):
+    return clientlog._when(rec)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
