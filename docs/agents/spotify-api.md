@@ -88,6 +88,15 @@ Issue numbers refer to GitHub issues on GhostCrab/pulseline (label `spotify-api`
    instead of autoplaying on, which is why a `noMatch` at or past `W.total` is the cooldown
    rather than a fault. Above `PLAY_URI_MAX` (100, a chosen bound — the spec states no limit
    on `uris`) it falls back to a context start and tells the user.
+
+   **Confirmed 2026-11-11: with a `uris` start, Spotify's shuffle state does not matter.**
+   The Spotify app showed shuffle on for an entire 20-minute run and playback stayed in
+   timeline order. So the whole forced-linear dance is only load-bearing for the context
+   fallback: `forceLinearPlayback(deviceId, shuffleMatters)` skips the settle-and-verify
+   round trip on a `uris` start (worth ~300 ms on the START gesture, which is a user
+   gesture), and the shuffle warnings are suppressed there too. **Repeat is still set
+   either way** — `repeat=track` would loop one track and desync the clock no matter how
+   playback was started.
 5. **`progress_ms` is stale by one round trip.** Compensate with `+rtt/2`, then *slew* the local
    clock toward the truth (±12 %) rather than snapping; snap only on >2.5 s drift. Snapping
    produced a visible flicker every 5 s.

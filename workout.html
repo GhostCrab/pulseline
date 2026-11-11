@@ -1007,7 +1007,11 @@ function playBody(tracks,playlistKey){
     ?{uris,position_ms:0}
     :{context_uri:"spotify:playlist:"+playlistKey,offset:{position:0},position_ms:0};
 }
-async function forceLinearPlayback(deviceId){
+/* `shuffleMatters` is false for a uris start, where the order is fixed by the request
+   and the shuffle flag is cosmetic - verified on a device 2026-11-11: the Spotify app
+   showed shuffle on for a whole 20-minute run and playback stayed in order. Repeat
+   still matters either way: repeat=track would loop one track and desync the clock. */
+async function forceLinearPlayback(deviceId,shuffleMatters){
   const q=deviceId?"&device_id="+encodeURIComponent(deviceId):"";
   try{
     if(deviceId)await api("/me/player",{method:"PUT",body:{device_ids:[deviceId],play:false}});
@@ -1017,15 +1021,12 @@ async function forceLinearPlayback(deviceId){
   catch(e){ok=false;clog("linearFail",{step:"shuffle",msg:e.message,name:e.name})}
   try{await api("/me/player/repeat?state=off"+q,{method:"PUT"})}
   catch(e){ok=false;clog("linearFail",{step:"repeat",msg:e.message,name:e.name})}
-  /* Settle, verify, and re-apply once - and this is LOAD-BEARING, not a diagnostic.
-     Spotify accepts shuffle?state=false with a 200 and applies it asynchronously, so a
-     device that was just transferred to can still report shuffle_state:true right
-     afterwards. Issue play before it propagates and the queue is already shuffled; by
-     quirk 4, turning shuffle off after play does NOT reorder the queue, so this is the
-     only place a retry can help. Evidence: a run without this read started shuffled,
-     and the next run with it did not (data/clientlog, 2026-11-11).
-     Do not remove it to save the round trip, and do not loop it: START is a user
-     gesture and must stay responsive. */
+  /* Settle, verify and re-apply once - but ONLY when a context start is coming, where
+     Spotify's own shuffle flag decides the queue order. quirk 4 means it cannot be
+     fixed after play, so this is the one place a retry can help. For a uris start the
+     order is fixed by the request, so this whole round trip is skipped and START stays
+     responsive. Do not loop it either way: START is a user gesture. */
+  if(!shuffleMatters)return ok;
   try{
     const st=await api("/me/player");
     if(st){
@@ -1054,7 +1055,6 @@ async function beginPlayback(){          // called from the START tap (a user ge
       if(!id)throw new Error("in-app player unavailable");
       devId=id;q="?device_id="+encodeURIComponent(id);
     }
-    const linear=await forceLinearPlayback(devId);
     /* Start from an EXPLICIT, ordered track list, not the playlist context.
        A context start is what Spotify reshuffles: measured on 2026-11-11, shuffle read
        as off immediately before play, read as on immediately after, and live sync saw a
@@ -1066,9 +1066,14 @@ async function beginPlayback(){          // called from the START tap (a user ge
     const body=playBody(W.ws.tracks,W.key);
     clog("playStart",{mode:body.uris?"uris":"context",
       tracks:(W.ws.tracks||[]).length});
-    if(!body.uris&&W&&!W.warned.shuffle){
+    W.playedByUris=!!body.uris;
+    const linear=await forceLinearPlayback(devId,!body.uris);
+    /* Only warn about shuffle when it can actually affect the order. On a uris start it
+       cannot, and a warning that fires on a working setup just teaches you to ignore
+       warnings. */
+    if(!body.uris&&!linear&&W&&!W.warned.shuffle){
       W.warned.shuffle=true;
-      toast("Starting from the playlist instead of track by track — turn shuffle off in Spotify or the timeline may not match",7000);
+      toast("Couldn't turn shuffle off in Spotify, and this playlist is too long to start track by track — the timeline may not match",7000);
     }
     await api("/me/player/play"+q,{method:"PUT",body});
     /* Verify rather than assume: if the device ignored the shuffle call, say so once
@@ -1093,7 +1098,9 @@ async function beginPlayback(){          // called from the START tap (a user ge
         for(const k of Object.keys(st))if(/shuffle/i.test(k))sh[k]=st[k];
         clog("shuffleState",{when:"after-play",observed:sh,repeat:st.repeat_state,
           ctx:(st.context&&st.context.uri)||null});
-        if(st.shuffle_state&&W&&!W.warned.shuffle){
+        /* Only a context start can be reordered by this flag; on a uris start the
+           order is fixed by the request and shuffle reading as on is cosmetic. */
+        if(st.shuffle_state&&W&&!W.warned.shuffle&&!W.playedByUris){
           W.warned.shuffle=true;
           toast("Spotify still has shuffle on — turn it off in the app or the timeline won't match",6000);
         }

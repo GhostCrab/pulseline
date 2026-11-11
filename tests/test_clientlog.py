@@ -399,6 +399,53 @@ class TestDegradeAndFailure(unittest.TestCase):
         self.assertEqual(found[0].severity, clientlog.WARN)
         self.assertIn("reshuffles", found[0].message)
 
+    def test_shuffle_on_after_a_uri_start_is_reported_as_irrelevant(self):
+        """Verified on a device: the Spotify app showed shuffle on for a whole 20-minute
+        run and playback stayed in order. Warning about the flag there would be noise."""
+        records = [
+            entry("playStart", t=1, mode="uris", tracks=6),
+            entry("shuffleState", t=2, when="before-play", observed={"shuffle_state": True}),
+            entry("shuffleState", t=3, when="after-play", observed={"shuffle_state": True}),
+        ]
+        self.assertEqual(by_code(records, "shuffle-reenabled-by-play"), [])
+        self.assertEqual(by_code(records, "shuffle-call-ignored"), [])
+        found = by_code(records, "shuffle-irrelevant")
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].severity, clientlog.INFO)
+        self.assertIn("does not matter", found[0].message)
+
+    def test_a_context_start_still_gets_the_flag_verdict(self):
+        records = [
+            entry("playStart", t=1, mode="context", tracks=140),
+            entry("shuffleState", t=2, when="before-play", observed={"shuffle_state": False}),
+            entry("shuffleState", t=3, when="after-play", observed={"shuffle_state": True}),
+        ]
+        found = by_code(records, "shuffle-reenabled-by-play")
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].severity, clientlog.WARN)
+
+    def test_order_confirmed_and_played_past_the_end_can_both_appear(self):
+        """The ideal run: matched in order early, and drifted only at the cooldown.
+        Reporting one and swallowing the other loses the positive evidence."""
+        records = [
+            entry("begin", t=1), entry("playStart", t=2, mode="uris", tracks=6),
+            entry("syncDiag", t=3, diagnosis="inOrder", at=4, total=1200, done=False),
+            entry("syncDiag", t=4, diagnosis="orderDrift", at=1200, total=1200, done=True),
+        ]
+        self.assertEqual(len(by_code(records, "order-confirmed")), 1)
+        self.assertEqual(len(by_code(records, "played-past-the-end")), 1)
+        self.assertEqual(by_code(records, "order-actually-wrong"), [])
+
+    def test_drift_during_the_run_suppresses_both_reassurances(self):
+        records = [
+            entry("begin", t=1), entry("playStart", t=2, mode="uris", tracks=6),
+            entry("syncDiag", t=3, diagnosis="inOrder", at=4, total=1200, done=False),
+            entry("syncDiag", t=4, diagnosis="noMatch", at=90, total=1200, done=False),
+        ]
+        self.assertEqual(len(by_code(records, "order-actually-wrong")), 1)
+        self.assertEqual(by_code(records, "order-confirmed"), [])
+        self.assertEqual(by_code(records, "played-past-the-end"), [])
+
     def test_a_retry_is_recorded(self):
         found = by_code([entry("shuffleRetry")], "shuffle-retried")
         self.assertEqual(len(found), 1)

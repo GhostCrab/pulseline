@@ -486,6 +486,36 @@ test("every start sets position_ms so a resumed device cannot start mid-track", 
   assert.equal(playBody(tracksOf(PLAY_URI_MAX + 1), "k").position_ms, 0);
 });
 
+test("the shuffle settle round trip is skipped for a uri start", () => {
+  /* Verified on a device: the Spotify app showed shuffle on for a whole 20-minute run
+   * and playback stayed in order, because a uris start takes its order from the request.
+   * So the settle-and-verify GET is only worth its ~300ms on the START gesture when a
+   * context start is coming. */
+  const fn = stripComments(extractFunction("forceLinearPlayback"));
+  assert.match(fn, /shuffleMatters/, "the start mode is not considered at all");
+  assert.match(fn, /if\(!shuffleMatters\)return ok;/,
+    "the settle step is not gated on the start mode");
+  const gate = fn.indexOf("if(!shuffleMatters)return ok;");
+  assert.ok(fn.indexOf('/me/player/repeat') < gate,
+    "repeat must still be set: repeat=track would loop one track and desync the clock");
+  assert.ok(fn.lastIndexOf('api("/me/player")') > gate,
+    "the verify GET must sit after the gate, or it is not skipped");
+});
+
+test("the start mode is decided before the linear sequence runs", () => {
+  // forceLinearPlayback needs to know whether shuffle matters, so playBody comes first.
+  const fn = stripComments(extractFunction("beginPlayback"));
+  assert.ok(fn.indexOf("playBody(") < fn.indexOf("forceLinearPlayback("),
+    "playBody must be computed before forceLinearPlayback is called");
+});
+
+test("the shuffle warning only fires when shuffle can affect the order", () => {
+  // A warning that fires on a working setup teaches you to ignore warnings.
+  const fn = stripComments(extractFunction("beginPlayback"));
+  assert.match(fn, /if\(!body\.uris&&!linear/,
+    "the shuffle toast is not gated on the start mode");
+});
+
 test("the handoff no longer depends on Spotify reporting a context", () => {
   /* Playback now starts from a uri list, so there IS no context. Without falling back
    * to the workout's own playlist the handoff would move only the current track and

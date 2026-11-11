@@ -221,7 +221,7 @@ def findings(records, bad=()):
                 rule="spotify-api.md quirk 4",
                 evidence=[{"diagnosis": k, "at": rdiag[k].get("at"),
                            "total": rdiag[k].get("total")} for k in during]))
-        elif after_end:
+        if after_end and not during:
             out.append(Finding(
                 INFO, "played-past-the-end",
                 "Live sync observed %s %s, at or past the end of the workout. That is the "
@@ -230,7 +230,7 @@ def findings(records, bad=()):
                 % (" and ".join(after_end), _at(rdiag[after_end[0]]), label),
                 evidence=[{"diagnosis": k, "at": rdiag[k].get("at"),
                            "total": rdiag[k].get("total")} for k in after_end]))
-        elif "inOrder" in rdiag:
+        if "inOrder" in rdiag and not during:
             flag_on = any(bool((r.get("observed") or {}).get("shuffle_state")) for r in rpost)
             out.append(Finding(
                 INFO, "order-confirmed",
@@ -240,7 +240,20 @@ def findings(records, bad=()):
                 evidence=[{"at": rdiag["inOrder"].get("at"),
                            "total": rdiag["inOrder"].get("total")}]))
 
-        if rpre and rpost:
+        by_uris = any(r.get("mode") == "uris" for r in _of_type(run, "playStart"))
+        if by_uris and rpre and rpost:
+            # The flag is cosmetic here: the order came from the request. Verified on a
+            # device - the Spotify app showed shuffle on for a whole 20-minute run and
+            # playback stayed in order. Reporting it would be noise.
+            post_on = bool((rpost[-1].get("observed") or {}).get("shuffle_state"))
+            if post_on:
+                out.append(Finding(
+                    INFO, "shuffle-irrelevant",
+                    "Spotify reports shuffle as on, which does not matter: playback "
+                    "started from an explicit track list, so the order came from the "
+                    "request.%s" % label,
+                    evidence=[{"after": rpost[-1].get("observed")}]))
+        elif rpre and rpost:
             pre_on = bool((rpre[-1].get("observed") or {}).get("shuffle_state"))
             post_on = bool((rpost[-1].get("observed") or {}).get("shuffle_state"))
             ev = [{"before": rpre[-1].get("observed"), "after": rpost[-1].get("observed")}]
