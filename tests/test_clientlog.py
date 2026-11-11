@@ -385,6 +385,20 @@ class TestDegradeAndFailure(unittest.TestCase):
                    entry("begin", t=2), entry("syncDiag", t=3, diagnosis="inOrder")]
         self.assertEqual([len(g) for g in clientlog.split_runs(records)], [2, 2])
 
+    def test_a_uri_start_is_reported_as_safe(self):
+        found = by_code([entry("playStart", mode="uris", tracks=7)], "started-by-uris")
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].severity, clientlog.INFO)
+        self.assertIn("cannot reorder", found[0].message)
+        self.assertIn("7 tracks", found[0].message)
+
+    def test_a_context_start_is_a_warning_because_it_can_be_reshuffled(self):
+        found = by_code([entry("playStart", mode="context", tracks=140)],
+                        "started-by-context")
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].severity, clientlog.WARN)
+        self.assertIn("reshuffles", found[0].message)
+
     def test_a_retry_is_recorded(self):
         found = by_code([entry("shuffleRetry")], "shuffle-retried")
         self.assertEqual(len(found), 1)

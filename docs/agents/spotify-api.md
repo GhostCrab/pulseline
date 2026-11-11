@@ -73,6 +73,21 @@ Issue numbers refer to GitHub issues on GhostCrab/pulseline (label `spotify-api`
 
    Judge the outcome on the **after-play** reading. A `before-play` reading showing shuffle on
    only means the setting is still propagating.
+
+   **None of that is sufficient, which is why playback no longer starts from a context.**
+   Measured 2026-11-11: shuffle read as *off* immediately before play, as *on* immediately
+   after, and live sync saw a track outside the workout at `0m00s` of a 20-minute run. The
+   `context_uri` start is what Spotify reshuffles, and by the rule above it cannot be undone.
+   So `beginPlayback()` sends an **explicit `uris` list in timeline order** (`playBody()`),
+   which plays in the order given whatever the shuffle flag says. A workspace must be *clean*
+   to run live, so that list is exactly the saved playlist order.
+
+   Consequences worth knowing. There is then **no playing context**, so `doHandoff()` falls
+   back to the workout's own playlist rather than the reported context — without that the
+   handoff would move a single track and stop. And playback **ends** after the last track
+   instead of autoplaying on, which is why a `noMatch` at or past `W.total` is the cooldown
+   rather than a fault. Above `PLAY_URI_MAX` (100, a chosen bound — the spec states no limit
+   on `uris`) it falls back to a context start and tells the user.
 5. **`progress_ms` is stale by one round trip.** Compensate with `+rtt/2`, then *slew* the local
    clock toward the truth (±12 %) rather than snapping; snap only on >2.5 s drift. Snapping
    produced a visible flicker every 5 s.

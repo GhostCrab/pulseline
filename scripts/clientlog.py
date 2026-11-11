@@ -215,8 +215,8 @@ def findings(records, bad=()):
         if during:
             out.append(Finding(
                 HIGH, "order-actually-wrong",
-                "Live sync observed %s %s into the workout: the audio really was not "
-                "following the timeline.%s"
+                "Live sync observed %s %s: the audio really was not following the "
+                "timeline.%s"
                 % (" and ".join(during), _at(rdiag[during[0]]), label),
                 rule="spotify-api.md quirk 4",
                 evidence=[{"diagnosis": k, "at": rdiag[k].get("at"),
@@ -271,6 +271,23 @@ def findings(records, bad=()):
             "Shuffle had not taken by the time it was checked, so it was re-applied "
             "before play. Expected occasionally; the setting propagates asynchronously.",
             evidence=[{"t": _when(rec)}]))
+
+    # --- how playback was started ---------------------------------------------------
+    for rec in _of_type(records, "playStart"):
+        if rec.get("mode") == "uris":
+            out.append(Finding(
+                INFO, "started-by-uris",
+                "Playback started from an explicit list of %s tracks, so the shuffle flag "
+                "cannot reorder it." % rec.get("tracks"),
+                evidence=[{"t": _when(rec), "tracks": rec.get("tracks")}]))
+        else:
+            out.append(Finding(
+                WARN, "started-by-context",
+                "Playback started from the playlist context (%s tracks), which is what "
+                "Spotify reshuffles. Expected only above the %s-track bound."
+                % (rec.get("tracks"), 100),
+                rule="spotify-api.md quirk 4",
+                evidence=[{"t": _when(rec), "tracks": rec.get("tracks")}]))
 
     # --- a success whose body would not parse ----------------------------------------
     for rec in _of_type(records, "apiBody"):

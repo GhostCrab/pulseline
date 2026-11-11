@@ -426,6 +426,75 @@ test("applySync does not record a verdict for a player blink", () => {
   assert.deepEqual(logged, []);
 });
 
+/* ---- playBody: what Spotify is asked to play ---- */
+
+/* The page's PLAY_URI_MAX, read out of the source rather than restated here. */
+const PLAY_URI_MAX = Number(src.match(/const PLAY_URI_MAX=(\d+);/)[1]);
+
+function playBody(tracks, key) {
+  const factory = new Function(
+    "const PLAY_URI_MAX=" + PLAY_URI_MAX + ";\n"
+    + extractFunction("playBody") + ";\nreturn playBody;");
+  return factory()(tracks, key);
+}
+
+const tracksOf = n => Array.from({ length: n }, (_, i) => ({ uri: "spotify:track:t" + i }));
+
+test("a normal workout starts from an explicit, ordered uri list", () => {
+  /* The fix for the real bug. Measured 2026-11-11: shuffle read off immediately before
+   * play, on immediately after, and live sync saw a track outside the workout at 0m00s
+   * of a 20m00s run. quirk 4 means that cannot be undone after play, so the only remedy
+   * is to give Spotify no context to reshuffle. */
+  const body = playBody(tracksOf(7), "4SKmbOB");
+  assert.deepEqual(body, { uris: tracksOf(7).map(t => t.uri), position_ms: 0 });
+  assert.ok(!("context_uri" in body), "a context start is what gets reshuffled");
+});
+
+test("the uri list preserves timeline order", () => {
+  const body = playBody(tracksOf(5), "k");
+  assert.deepEqual(body.uris,
+    ["spotify:track:t0", "spotify:track:t1", "spotify:track:t2",
+     "spotify:track:t3", "spotify:track:t4"]);
+});
+
+test("exactly at the bound still uses the uri list", () => {
+  assert.ok(playBody(tracksOf(PLAY_URI_MAX), "k").uris);
+});
+
+test("above the bound falls back to the playlist context", () => {
+  const body = playBody(tracksOf(PLAY_URI_MAX + 1), "4SKmbOB");
+  assert.equal(body.context_uri, "spotify:playlist:4SKmbOB");
+  assert.deepEqual(body.offset, { position: 0 });
+  assert.ok(!body.uris);
+});
+
+test("an empty or unusable track list falls back to the context", () => {
+  for (const tracks of [[], null, undefined, [{}], [{ uri: null }]]) {
+    const body = playBody(tracks, "k");
+    assert.equal(body.context_uri, "spotify:playlist:k",
+      `${JSON.stringify(tracks)} should fall back`);
+  }
+});
+
+test("tracks without a uri are dropped rather than sent as holes", () => {
+  const body = playBody([{ uri: "a" }, {}, { uri: "b" }, { uri: null }], "k");
+  assert.deepEqual(body.uris, ["a", "b"]);
+});
+
+test("every start sets position_ms so a resumed device cannot start mid-track", () => {
+  assert.equal(playBody(tracksOf(3), "k").position_ms, 0);
+  assert.equal(playBody(tracksOf(PLAY_URI_MAX + 1), "k").position_ms, 0);
+});
+
+test("the handoff no longer depends on Spotify reporting a context", () => {
+  /* Playback now starts from a uri list, so there IS no context. Without falling back
+   * to the workout's own playlist the handoff would move only the current track and
+   * then stop, losing the cooldown. */
+  const fn = stripComments(extractFunction("doHandoff"));
+  assert.match(fn, /p\.ctx\|\|/, "doHandoff still relies solely on the reported context");
+  assert.match(fn, /spotify:playlist:/, "it does not fall back to the workout playlist");
+});
+
 /* ---- the boot gate must be reachable ---- */
 
 test("spansOf defers its PLSync lookup to call time", () => {

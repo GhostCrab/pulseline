@@ -904,7 +904,11 @@ async function doHandoff(deviceId,name){
     let seamless=false;
     if(p&&p.uri){
       const lead=startupAllowance();
-      const body=p.ctx?{context_uri:p.ctx,offset:{uri:p.uri}}:{uris:[p.uri]};
+      /* Prefer the workout's own playlist over whatever context Spotify reports:
+         playback now starts from an explicit uri list, so there IS no context, and
+         without this the handoff would move only the current track and then stop. */
+      const ctx=p.ctx||(W&&W.key?"spotify:playlist:"+W.key:null);
+      const body=ctx?{context_uri:ctx,offset:{uri:p.uri}}:{uris:[p.uri]};
       /* computed at the moment of sending, so the reading's own age is included */
       body.position_ms=Math.max(0,Math.round(p.pos+(performance.now()-p.at)+lead));
       const sentAt=performance.now(),wanted=body.position_ms;
@@ -989,6 +993,20 @@ $("#pauseBtn").onclick=()=>setPaused(P.playing);
    cleared before the first note. The endpoints need an active device, so the target
    is activated (without playing) first. Best-effort: a device that rejects them must
    not stop the workout, and the order check during playback will catch the fallout. */
+/* A chosen bound, not a documented one: docs/spotify/open-api-schema.yaml states no
+   limit on /me/player/play's `uris`. 100 is the size index.html already chunks playlist
+   writes into, so it is the figure this project has settled on for a track-list request.
+   Above it, fall back to a context start and say so. */
+const PLAY_URI_MAX=100;
+/* Which body to start playback with. Pure, so the decision is testable: an explicit
+   uris list when the track list is usable and within the bound, otherwise the playlist
+   context. Returning the body rather than a flag keeps the caller to one shape. */
+function playBody(tracks,playlistKey){
+  const uris=(tracks||[]).map(t=>t&&t.uri).filter(Boolean);
+  return uris.length>0&&uris.length<=PLAY_URI_MAX
+    ?{uris,position_ms:0}
+    :{context_uri:"spotify:playlist:"+playlistKey,offset:{position:0},position_ms:0};
+}
 async function forceLinearPlayback(deviceId){
   const q=deviceId?"&device_id="+encodeURIComponent(deviceId):"";
   try{
@@ -1037,8 +1055,22 @@ async function beginPlayback(){          // called from the START tap (a user ge
       devId=id;q="?device_id="+encodeURIComponent(id);
     }
     const linear=await forceLinearPlayback(devId);
-    await api("/me/player/play"+q,{method:"PUT",
-      body:{context_uri:"spotify:playlist:"+W.key,offset:{position:0},position_ms:0}});
+    /* Start from an EXPLICIT, ordered track list, not the playlist context.
+       A context start is what Spotify reshuffles: measured on 2026-11-11, shuffle read
+       as off immediately before play, read as on immediately after, and live sync saw a
+       track outside the workout at 0m00s of a 20m00s run. quirk 4 means that cannot be
+       undone afterwards, so the only fix is to not give Spotify a context to shuffle.
+       An explicit uris list plays in the order given, whatever the shuffle flag says.
+       The workspace must be CLEAN to run live, so this list is exactly the saved
+       playlist order. */
+    const body=playBody(W.ws.tracks,W.key);
+    clog("playStart",{mode:body.uris?"uris":"context",
+      tracks:(W.ws.tracks||[]).length});
+    if(!body.uris&&W&&!W.warned.shuffle){
+      W.warned.shuffle=true;
+      toast("Starting from the playlist instead of track by track — turn shuffle off in Spotify or the timeline may not match",7000);
+    }
+    await api("/me/player/play"+q,{method:"PUT",body});
     /* Verify rather than assume: if the device ignored the shuffle call, say so once
        instead of letting the timeline quietly disagree with the audio. */
     if(!linear&&W&&!W.warned.shuffle){
