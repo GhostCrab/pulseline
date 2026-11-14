@@ -916,6 +916,21 @@ async function livePosition(){
   }catch(e){}
   return null;
 }
+/* What to ask the target device to play. Pure, so it is testable (position_ms is added
+   by the caller at the moment of sending).
+   The workout's OWN playlist comes first, never the context the player reports. After a
+   uris start the in-app player reports "spotify:webapi" - truthy, and not something
+   Spotify will play: measured 2026-11-14 on an iPhone and on the real SDK in Chrome,
+   sending it back answers `400 Invalid context uri` and nothing is handed off. The same
+   request with the playlist answers 204 and carries on from the same position.
+   A reported context is only a last resort, and only when it is one of the kinds
+   docs/spotify/open-api-schema.yaml lists as valid for /me/player/play (albums, artists
+   and playlists); otherwise the single track is moved. */
+function handoffBody(p,playlistKey){
+  const ctx=playlistKey?"spotify:playlist:"+playlistKey
+    :(/^spotify:(playlist|album|artist):/.test(p.ctx||"")?p.ctx:null);
+  return ctx?{context_uri:ctx,offset:{uri:p.uri}}:{uris:[p.uri]};
+}
 async function doHandoff(deviceId,name){
   const list=$("#handoffList");
   try{
@@ -923,11 +938,7 @@ async function doHandoff(deviceId,name){
     let seamless=false;
     if(p&&p.uri){
       const lead=startupAllowance();
-      /* Prefer the workout's own playlist over whatever context Spotify reports:
-         playback now starts from an explicit uri list, so there IS no context, and
-         without this the handoff would move only the current track and then stop. */
-      const ctx=p.ctx||(W&&W.key?"spotify:playlist:"+W.key:null);
-      const body=ctx?{context_uri:ctx,offset:{uri:p.uri}}:{uris:[p.uri]};
+      const body=handoffBody(p,W&&W.key);
       /* computed at the moment of sending, so the reading's own age is included */
       body.position_ms=Math.max(0,Math.round(p.pos+(performance.now()-p.at)+lead));
       const sentAt=performance.now(),wanted=body.position_ms;

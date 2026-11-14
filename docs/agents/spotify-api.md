@@ -82,9 +82,18 @@ Issue numbers refer to GitHub issues on GhostCrab/pulseline (label `spotify-api`
    which plays in the order given whatever the shuffle flag says. A workspace must be *clean*
    to run live, so that list is exactly the saved playlist order.
 
-   Consequences worth knowing. There is then **no playing context**, so `doHandoff()` falls
-   back to the workout's own playlist rather than the reported context — without that the
-   handoff would move a single track and stop. And playback **ends** after the last track
+   Consequences worth knowing. There is then **no playing playlist context** — and the
+   in-app player does not report "none", it reports the placeholder **`spotify:webapi`**
+   (measured on the real SDK, 2026-11-14; `GET /me/player` reports `context: null`). Sent
+   back as a `context_uri` that answers **`400 Invalid context uri`**, which is how the
+   handoff silently did nothing on an iPhone: Spotify opened, kept showing Pulseline as the
+   player, and pressing play there took over the bare track list — no playlist shown, and
+   nothing for shuffle-after-handoff to shuffle. So `handoffBody()` puts the workout's own
+   playlist **first** and never trusts the reported context over it; a reported context is
+   a last resort and only when it is a playlist, album or artist. With the playlist the same
+   request answers 204, continues from the same position, and `shuffle?state=true` then
+   takes (the next track changed to a non-sequential one). The Spotify app also shows the
+   playlist only from the handoff onwards: during the workout there is no context to show. And playback **ends** after the last track
    instead of autoplaying on, which is why a `noMatch` at or past `W.total` is the cooldown
    rather than a fault. Above `PLAY_URI_MAX` (100, a chosen bound — the spec states no limit
    on `uris`) it falls back to a context start and tells the user.

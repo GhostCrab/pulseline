@@ -468,13 +468,53 @@ test("the shuffle warning only fires when shuffle can affect the order", () => {
     "the shuffle toast is not gated on the start mode");
 });
 
-test("the handoff no longer depends on Spotify reporting a context", () => {
-  /* Playback now starts from a uri list, so there IS no context. Without falling back
-   * to the workout's own playlist the handoff would move only the current track and
-   * then stop, losing the cooldown. */
+/* ---- handoffBody: what the target device is asked to play ---- */
+
+function handoffBody(p, key) {
+  return new Function(extractFunction("handoffBody") + ";\nreturn handoffBody;")()(p, key);
+}
+
+test("REGRESSION: the handoff plays the workout's playlist, not the SDK's placeholder context", () => {
+  /* Measured on the real SDK 2026-11-14: after a uris start the in-app player reports
+   * its context as "spotify:webapi" - truthy, and not a playable context. The handoff
+   * sent it and Spotify answered `400 Invalid context uri`, on an iPhone and again in
+   * desktop Chrome. Nothing was handed off; pressing play in Spotify then took over the
+   * bare track list, so no playlist showed and shuffle-after-handoff had nothing to
+   * shuffle. With the workout's own playlist the same request answered 204 and carried
+   * on from the same position.
+   *
+   * This replaces a structural test that asserted the source contained `p.ctx||`,
+   * which is the exact expression that was wrong. */
+  const body = handoffBody({ ctx: "spotify:webapi", uri: "spotify:track:now" }, "4SKmbOB");
+  assert.deepEqual(body,
+    { context_uri: "spotify:playlist:4SKmbOB", offset: { uri: "spotify:track:now" } });
+});
+
+test("the handoff uses the workout's playlist when no context is reported at all", () => {
+  // Spotify-app mode: GET /me/player reports `context: null` for a uris start.
+  const body = handoffBody({ ctx: null, uri: "spotify:track:now" }, "4SKmbOB");
+  assert.equal(body.context_uri, "spotify:playlist:4SKmbOB");
+  assert.deepEqual(body.offset, { uri: "spotify:track:now" });
+});
+
+test("without a workout playlist, a reported playlist, album or artist context is used", () => {
+  // The spec's valid contexts for /me/player/play: albums, artists and playlists.
+  for (const ctx of ["spotify:playlist:abc", "spotify:album:abc", "spotify:artist:abc"]) {
+    assert.equal(handoffBody({ ctx, uri: "spotify:track:now" }, null).context_uri, ctx);
+  }
+});
+
+test("without a workout playlist, an unplayable context falls back to the single track", () => {
+  for (const ctx of ["spotify:webapi", "", null, undefined]) {
+    assert.deepEqual(handoffBody({ ctx, uri: "spotify:track:now" }, null),
+      { uris: ["spotify:track:now"] }, `${JSON.stringify(ctx)} was sent as a context`);
+  }
+});
+
+test("doHandoff builds its request through handoffBody", () => {
   const fn = stripComments(extractFunction("doHandoff"));
-  assert.match(fn, /p\.ctx\|\|/, "doHandoff still relies solely on the reported context");
-  assert.match(fn, /spotify:playlist:/, "it does not fall back to the workout playlist");
+  assert.match(fn, /handoffBody\(p,/, "doHandoff no longer uses the tested body builder");
+  assert.ok(!/context_uri/.test(fn), "doHandoff builds a context request of its own");
 });
 
 /* ---- the boot gate must be reachable ---- */
