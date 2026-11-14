@@ -97,6 +97,16 @@ Issue numbers refer to GitHub issues on GhostCrab/pulseline (label `spotify-api`
    gesture), and the shuffle warnings are suppressed there too. **Repeat is still set
    either way** — `repeat=track` would loop one track and desync the clock no matter how
    playback was started.
+
+   **Since 2026-11-14 a `uris` start sends `play` first, and nothing before it.** The order
+   at the top of this quirk now applies to the context fallback only. Measured on the real
+   SDK with `debug/start-probe.js`: with `/shuffle` and `/repeat` taking the 4 s and 2.5 s a
+   phone had logged the day before, `play` was not even sent until 7.0 s after START.
+   `play?device_id=<sdk device>` starts a freshly registered in-app device on its own, with
+   no `PUT /me/player` transfer first (204, first playing state 383 ms after START). The
+   transfer is `play:false`, so it must never follow `play`. `repeat` and `shuffle` are sent
+   after `play` and not awaited; a failed `repeat` is announced, a failed `shuffle` is only
+   logged.
 5. **`progress_ms` is stale by one round trip.** Compensate with `+rtt/2`, then *slew* the local
    clock toward the truth (±12 %) rather than snapping; snap only on >2.5 s drift. Snapping
    produced a visible flicker every 5 s.
@@ -128,3 +138,15 @@ Issue numbers refer to GitHub issues on GhostCrab/pulseline (label `spotify-api`
    and `autoplay_failed` are the only signals. `workout.html` listens for all of them and drops to
    SIMULATED with a message. `debug/sdk-probe.html` (logs every SDK event plus each API status) is
    what pinned this down. No automated seam reaches the SDK, so there's no regression test.
+11. **Until your own `play` lands, the SDK describes the previous session.** Measured on the
+    real SDK in desktop Chrome, 2026-11-14 (`debug/start-probe.js`): from about 200 ms after
+    the device is addressed, `player_state_changed` reports the *last* session — `paused:true`,
+    the old track, the old position — first with `loading:true`, then `loading:false`, and it
+    keeps arriving for roughly 500 ms after `play` has answered 204. The new playback then
+    shows up as `paused:false, loading:true, position:0`. Acting on the stale state snapped
+    the workout clock to wherever the last session stopped (a phone logged `at:1261` of a
+    1200 s workout one second after START), raised a shuffle warning over silence, and
+    paused the workout until `play` landed. `onSdkState()` therefore ignores everything until
+    `play` has been **sent** and a state arrives that is **not paused** (`W.playSent`,
+    `W.heard`); `reviveSession()` applies the same gate. The Spotify-app (`connect`) path
+    polls every 5 s and has no such gate — not reproduced there, so not changed.

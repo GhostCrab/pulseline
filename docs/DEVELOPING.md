@@ -244,9 +244,12 @@ can hold it.
 | `tests/sync-core.test.js` | `sync-core.js` — the span match, the snap-or-slew decision, the slew absorber | the tuned constants *Hotspots* 6 warns about, half-RTT compensation, nearest-repeat matching, order-drift reporting, and that absorbing converges without overshoot |
 | `tests/workout-guard.test.js` | `guardRun` and `applySync` in `workout.html`, extracted from the real source | that a throw in the run loop is contained, reported once per run, and recorded as a `loopFail` entry; plus structurally, that `tick` and `setPaused` schedule from a `finally` |
 
+| `tests/workout-start.test.js` | `onSdkState`, `beginPlayback`, `forceLinearPlayback` and `reviveSession` in `workout.html`, extracted from the real source | the START sequence: SDK states **captured from the real SDK** replayed through the handler (the previous session's state must not move the clock, pause the workout or raise a warning), that a track-list start sends `play` first and never the transfer, that a context start keeps the full order, and that a start abandoned for a new run neither sends its `play` nor marks the new run simulated |
+
 None of these touches a browser, the Web Playback SDK, a Spotify session or the network.
-The playback *sequence* in `workout.html` is still not covered, because no seam reaches
-it — see *Hotspots* 1. That is the known gap, not an oversight.
+The START sequence is covered by replaying captured SDK states; pause, completion and
+handoff are still not, because no seam reaches them — see *Hotspots* 1. That is the known
+gap, not an oversight.
 
 ### Why there is no test against the live Spotify API
 
@@ -293,6 +296,18 @@ vacuously.
 
 Automation cannot replace that pass. A browser-driving agent sees the DOM, the console
 and the network, and all three report success during the exact failure that matters.
+
+What automation *can* reach is the real SDK in desktop Chrome. `debug/start-probe.js`,
+injected into an open `workout.html` (the one-liner is at the top of the file), records
+every Spotify API call with its timing, every SDK event with the page's clock and button
+beside it, and every toast, and `__probe.report()` summarises the most recent START:
+calls sent before `play`, time to the first playing state, clock jumps. It can also delay
+or fail chosen Spotify calls (`__probe.faults`), which is how a slow morning on a phone
+was recreated at a desk. It judges audio by the SDK's own position advancing, not by the
+API's word. It needs a signed-in Chrome with a real tap on START, it takes over playback
+on the account, and it is **not** iOS Safari: audio unlock, backgrounding and the socket
+dying when the app is left are still only visible through the client log and the HITL
+pass.
 
 ### Two rules for adding to tier 3
 
