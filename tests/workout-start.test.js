@@ -202,14 +202,15 @@ function freshBegin({ respond = () => null, sdkReady = Promise.resolve("dev1") }
   };
   const factory = new Function(
     "target", "hasStreamScope", "sdk", "initSdk", "api", "clog", "toast", "$",
-    "navigator", "setTimeout",
+    "navigator", "setTimeout", "BUILD", "performance",
     "let W=null,sdkErrTimes=[],sdkId='dev1';\nconst PLAY_URI_MAX=" + PLAY_URI_MAX + ";\n"
     + extractFunction("playBody") + "\n" + extractFunction("forceLinearPlayback") + "\n"
     + extractFunction("beginPlayback")
     + "\nreturn {begin:beginPlayback,setW:w=>{W=w}};");
   const page = factory("sdk", () => true, { activateElement: async () => {} },
     () => sdkReady, api, (type, data) => logged.push({ type, data }),
-    m => toasts.push(m), () => badge, { userAgent: "test" }, () => 0);
+    m => toasts.push(m), () => badge, { userAgent: "test" }, () => 0,
+    "abc1234", { now: () => 0 });
   const newRun = (n = 3) => ({ live: true, key: "pl1", ws: { tracks: manyTracks(n) },
     warned: { shuffle: false, noMatch: false, order: false } });
   const sent = () => calls.map(c => c.method + " " + c.path.split("?")[0]);
@@ -291,6 +292,38 @@ test("a healthy track-list start says nothing at all", async () => {
   assert.deepEqual(p.toasts, []);
   assert.equal(run.live, true);
   assert.equal(run.playSent, true, "onSdkState's gate would never open");
+});
+
+test("every start ends in exactly one logged outcome, stamped with the build", async () => {
+  /* scripts/clientlog.py reports a `begin` with none of playAck, beginFail or
+   * beginAbandoned after it as a request still in flight - the reading that could not be
+   * made on 2026-11-13. That only works if each ending really is logged. */
+  const outcome = p => p.logged.map(l => l.type)
+    .filter(t => ["playAck", "beginFail", "beginAbandoned"].includes(t));
+
+  const ok = freshBegin();
+  ok.setW(ok.newRun());
+  await ok.begin();
+  assert.deepEqual(outcome(ok), ["playAck"]);
+  assert.equal(ok.logged.find(l => l.type === "begin").data.rev, "abc1234");
+  assert.equal(typeof ok.logged.find(l => l.type === "playAck").data.ms, "number");
+
+  const failed = freshBegin({ respond: path => {
+    if (path.includes("/play")) throw new Error("Spotify 502");
+    return null;
+  } });
+  failed.setW(failed.newRun());
+  await failed.begin();
+  assert.deepEqual(outcome(failed), ["beginFail"]);
+
+  const ready = deferred();
+  const gone = freshBegin({ sdkReady: ready.promise });
+  gone.setW(gone.newRun());
+  const old = gone.begin();
+  gone.setW(gone.newRun());
+  ready.resolve("dev1");
+  await old;
+  assert.deepEqual(outcome(gone), ["beginAbandoned"]);
 });
 
 test("a context start keeps the full order: transfer, shuffle, repeat, verify, play", async () => {

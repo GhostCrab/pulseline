@@ -26,7 +26,7 @@ section is about.
 | `calendar.html` | history calendar + list | smallest page |
 | `analyze.html` | loopback capture + Essentia driver | owns the capture pipeline |
 | `analysis-core.js` | Essentia wrapper + METRICS catalogue | `ANALYSIS_VERSION = 8` |
-| `sync-core.js` | live sync decisions, shared with the editor | `SYNC_VERSION = 1`, pure, see ADR-0003 |
+| `sync-core.js` | live sync decisions, shared with the editor | `SYNC_VERSION` (pinned to each page's `NEEDS_SYNC` by `check.py`), pure, see ADR-0003 |
 
 **The duplication is deliberate.** Each page re-implements its own auth and store layer so a page
 can be opened standalone (the phone loads `workout.html` through a tunnel and nothing else). The
@@ -223,6 +223,14 @@ can hold it.
    object, as `sync-core.js` now does. `analysis-core.js` still leaks its top-level
    declarations (`loadEssentia`, `METRICS` and the rest); nothing collides today, and
    the `combined` check is what will say so if anything ever does.
+
+   The same tier holds **`.githooks/commit-msg`** (`scripts/commit_msg.py`). A commit
+   whose staged `workout.html` changes a function on the fragile playback path is refused
+   unless its message accounts for every step of the sequence — start, pause, external
+   pause, finish, completion card, handoff — with `yes` or `no` and the evidence or the
+   reason. It used to be a prose rule in `CODING_STANDARDS.md`, and the handoff shipped
+   broken past it twice. "Changed" is decided by comparing each function's text in `HEAD`
+   and in the index, so moving a function or editing elsewhere in the page does not trip it.
 2. **`CODING_STANDARDS.md`** — *judgement*. Cross-file consistency and "is the fallback
    visible", read by the reviewer and not by the implementer. Only for what no check
    could ever substitute for.
@@ -234,16 +242,15 @@ can hold it.
 
 | suite | seam | reaches |
 |---|---|---|
-| `tests/test_server_api.py` | `server.py`'s HTTP interface, over real HTTP on a scratch port | the storage-model invariants: shallow merge, the forced `history` drop, history idempotency and ts ordering, both legacy migrations, the summary projection and its mtime+size cache, `NS_RE` rejection, the 400-before-404 dispatch order, the client-log caps and rotation, `write_json_atomic`'s rolling backups |
+| `tests/test_server_api.py` | `server.py`'s HTTP interface, over real HTTP on a scratch port | the storage-model invariants: shallow merge, the forced `history` drop, history idempotency and ts ordering, both legacy migrations, the summary projection and its mtime+size cache, `NS_RE` rejection, the 400-before-404 dispatch order, the client-log caps and rotation, `write_json_atomic`'s rolling backups, and `/api/version` reading the served commit from `.git` (loose ref, packed ref, detached, absent) |
 | `tests/analysis-core.test.js` | `analysis-core.js`'s pure surface, via a stub `window` | `foldToReference`, `loudnessCurve01`, the `METRICS` catalogue, `metricByKey`, `metricValue`, `metricBounds` — including the documented-vs-observed provenance the *no-invented-numbers rule* rests on |
-| `tests/test_clientlog.py` | `scripts/clientlog.py`, the client-diagnostics reader | the failure signatures it recognises in a real device's log, and that it survives the truncated lines `server.py` is guaranteed to write |
+| `tests/test_clientlog.py` | `scripts/clientlog.py`, the client-diagnostics reader | the failure signatures it recognises in a real device's log, that a clean handoff and a resolved start report nothing above INFO, the `--timeline` view and `--expect`, and that it survives the truncated lines `server.py` is guaranteed to write |
+| `tests/test_commit_msg.py` | `scripts/commit_msg.py`, the commit-msg guardrail | that a change inside a fragile function is detected and one elsewhere in the page is not, that every listed function still exists in the real page, that a bare `yes` is not evidence, that `no` with a reason passes, and that merges and reverts are exempt |
 | `tests/test_mutate.py` | `scripts/mutate.py`, the mutation tool | that the file is restored byte for byte whatever happens, that a silently failed restore is reported rather than leaving a break in the tree, that a non-unique pattern aborts, and that green is reported as the failure |
 | `tests/page-helpers.test.js` | `tests/_page.js`, the shared extraction helpers every page-level suite is built on | that a function is lifted whole (including past a default parameter and the `async` keyword), that comments are stripped before any structural assertion, and that a `finally` block is located by brace matching rather than by a word match |
-| `tests/sync-core.test.js` | `sync-core.js` | covered above |
 | `tests/spotify-contract.test.js` | every Spotify path the pages reference, against `docs/spotify/open-api-schema.yaml` | that each path exists, is called with a method the spec defines, needs no scope the login omits, requests no scope nothing needs, and picks up no new deprecated endpoint. Enforces the `CODING_STANDARDS.md` rule that was previously review-only |
 | `tests/sync-core.test.js` | `sync-core.js` — the span match, the snap-or-slew decision, the slew absorber | the tuned constants *Hotspots* 6 warns about, half-RTT compensation, nearest-repeat matching, order-drift reporting, and that absorbing converges without overshoot |
-| `tests/workout-guard.test.js` | `guardRun` and `applySync` in `workout.html`, extracted from the real source | that a throw in the run loop is contained, reported once per run, and recorded as a `loopFail` entry; plus structurally, that `tick` and `setPaused` schedule from a `finally` |
-
+| `tests/workout-guard.test.js` | `guardRun` and `applySync` in `workout.html`, extracted from the real source | that a throw in the run loop is contained, reported once per run, and recorded as a `loopFail` entry; plus structurally, that `tick` and `setPaused` schedule from a `finally`. Also `api()`'s reading of a success body, `playBody` and `handoffBody` (what Spotify is asked to play), that `doHandoff` logs its outcome either way, and that `clogFlush` keeps a batch it could not deliver |
 | `tests/workout-start.test.js` | `onSdkState`, `beginPlayback`, `forceLinearPlayback` and `reviveSession` in `workout.html`, extracted from the real source | the START sequence: SDK states **captured from the real SDK** replayed through the handler (the previous session's state must not move the clock, pause the workout or raise a warning), that a track-list start sends `play` first and never the transfer, that a context start keeps the full order, and that a start abandoned for a new run neither sends its `play` nor marks the new run simulated |
 
 None of these touches a browser, the Web Playback SDK, a Spotify session or the network.
@@ -279,29 +286,53 @@ exact. The contract suite above covers the remaining question a live call would 
 and it picks the newest log in `data/` and reports only the **latest session**, because one
 log accumulates every workout ever run on that account and you almost always mean the one
 you just did. `--all` reports every session, `--list` shows what logs exist, `--json` for
-machine output, or pass a path explicitly.
+machine output, or pass a path explicitly. **`--timeline` prints the entries themselves
+in time order**, with a marker wherever the log goes quiet: the findings say what a
+session meant, the timeline says what happened, and locating a fault needs the second.
+`--expect TYPE` (repeatable) fails the report when the session holds no entry of that
+type, so a pass that never reached a step cannot read as clean.
 
 It recognises the missing-`streaming`-scope signature, paired `playback_error` events,
 each named SDK failure, a failed step of the forced-linear sequence, whatever Spotify
-actually reported about shuffle, contained run-loop throws, and terminal API failures.
+actually reported about shuffle, contained run-loop throws, terminal API failures, a
+failed or degraded handoff, and a START whose play request was never answered.
 It exits non-zero on a high-severity finding. This is the only route to evidence about in-app audio, because quirk 9 means
 the API reports success throughout a silent failure.
 
-`scripts/hitl-workout.sh` drives *you* through the full sequence the standards require
-(start, pause, external pause, finish, completion card, handoff), snapshots the client
-log by byte offset so findings cover only that pass, and prints a verdict block to paste
-into the PR as the re-verification record. It refuses to start if the prerequisites
-aren't met, because a dirty or demo workspace runs silent by design and would pass
-vacuously.
+What the page puts there, so the reader has something to read:
+
+- **Every `begin` carries `rev`**, the commit the page was served from (`GET /api/version`,
+  read from `.git` per request). `null` until the first answer, and against a server that
+  has not been restarted since the endpoint was added.
+- **Every start ends in exactly one of `playAck` (with its `ms`), `beginFail` or
+  `beginAbandoned`.** None of the three after a `begin` means the request was still in
+  flight when the log stops.
+- **Every handoff logs one `handoff` entry**, success included: `ok`, `mode`
+  (`playlist`, `track` or `transfer`), `shuffle`, `shuffleOk`, `ms`.
+- **A batch that could not be delivered is put back** and retried, on a network error or a
+  5xx. It used to be dropped, which made the log thinnest when the network was bad. A
+  batch stored whose answer was lost appears twice.
+
+`scripts/hitl-workout.sh` prints the prerequisites and the sequence the standards require
+(start, pause, external pause, finish, completion card, handoff), waits while you run the
+workout, then runs the reader with `--expect begin --expect playAck --expect handoff`. A
+dirty or demo workspace runs silent by design and would pass vacuously, which is why the
+prerequisites come first. For a workout run against production, `bash scripts/pull-log.sh`
+copies the log down first.
 
 Automation cannot replace that pass. A browser-driving agent sees the DOM, the console
 and the network, and all three report success during the exact failure that matters.
 
 What automation *can* reach is the real SDK in desktop Chrome. `debug/start-probe.js`,
-injected into an open `workout.html` (the one-liner is at the top of the file), records
+loaded by opening `http://127.0.0.1:8888/workout.html?probe=1` (loopback only; anywhere
+else, inject it with the one-liner at the top of the file), records
 every Spotify API call with its timing, every SDK event with the page's clock and button
 beside it, and every toast, and `__probe.report()` summarises the most recent START:
-calls sent before `play`, time to the first playing state, clock jumps. It can also delay
+calls sent before `play`, time to the first playing state, clock jumps. `await
+__probe.save()` writes that run into the local client log, to be read with
+`scripts/clientlog.py --timeline` instead of through a browser tool that truncates long
+output. Tap START through the page's own button (by element, not by screen coordinates:
+the window size changes between sessions and a missed tap looks like a dead player). It can also delay
 or fail chosen Spotify calls (`__probe.faults`), which is how a slow morning on a phone
 was recreated at a desk. It judges audio by the SDK's own position advancing, not by the
 API's word. It needs a signed-in Chrome with a real tap on START, it takes over playback

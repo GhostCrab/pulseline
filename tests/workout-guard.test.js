@@ -514,7 +514,8 @@ test("without a workout playlist, an unplayable context falls back to the single
 test("doHandoff builds its request through handoffBody", () => {
   const fn = stripComments(extractFunction("doHandoff"));
   assert.match(fn, /handoffBody\(p,/, "doHandoff no longer uses the tested body builder");
-  assert.ok(!/context_uri/.test(fn), "doHandoff builds a context request of its own");
+  // It may READ body.context_uri (to log what was sent); it must not build one.
+  assert.ok(!/context_uri\s*:/.test(fn), "doHandoff builds a context request of its own");
 });
 
 /* ---- the boot gate must be reachable ---- */
@@ -569,4 +570,142 @@ test("setPaused sets P.playing before anything that can throw", () => {
   assert.notEqual(tryAt, -1, "setPaused no longer has a try block");
   assert.ok(assigned < tryAt,
     "P.playing must be assigned before the try, or the finally schedules the wrong thing");
+});
+
+/* ---- the client log must survive the conditions it exists to record ---- */
+
+/* clog + clogFlush with a scripted fetch and captured timers. */
+function freshClog(fetchImpl) {
+  const posts = [], timers = [];
+  const fetchStub = (url, opts) => { posts.push(JSON.parse(opts.body).entries); return fetchImpl(posts.length); };
+  const retryMs = Number(src.match(/const CLOG_RETRY_MS=(\d+);/)[1]);
+  const factory = new Function("LSD", "fetch", "setTimeout", "clearTimeout", "Date",
+    "const CLOG={q:[],t:null};const CLOG_RETRY_MS=" + retryMs + ";\n"
+    + extractFunction("clog") + "\n" + extractFunction("clogFlush")
+    + "\nreturn {clog,clogFlush,CLOG};");
+  const page = factory({ get: () => "u_test" }, fetchStub,
+    (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, () => {}, { now: () => 1 });
+  return { ...page, posts, timers, retryMs };
+}
+const flushMicrotasks = () => new Promise(r => setImmediate(r));
+
+test("REGRESSION: a log batch that cannot be delivered is kept, not dropped", async () => {
+  /* The batch was spliced off the queue before the POST and thrown away on error, so the
+   * log was thinnest exactly when the network was bad. On 2026-11-13 three STARTs were
+   * each followed by 10-19s of nothing, and "the calls hung" could not be told from
+   * "the entries were lost". */
+  const p = freshClog(() => Promise.reject(new TypeError("Load failed")));
+  p.clog("begin", { target: "sdk" });
+  p.clog("playStart", { mode: "uris" });
+  p.clogFlush();
+  await flushMicrotasks();
+  assert.deepEqual(p.CLOG.q.map(e => e.type), ["begin", "playStart"], "the batch is gone");
+  assert.equal(p.timers[p.timers.length - 1].ms, p.retryMs, "no retry was scheduled");
+});
+
+test("a batch the server could not store (5xx) is kept too", async () => {
+  const p = freshClog(() => Promise.resolve({ status: 502 }));
+  p.clog("begin", {});
+  p.clogFlush();
+  await flushMicrotasks();
+  assert.equal(p.CLOG.q.length, 1);
+});
+
+test("a delivered batch leaves the queue, and a refused one (4xx) is not resent", async () => {
+  // Resending what the server rejected as malformed would loop forever.
+  for (const status of [200, 204, 400, 413]) {
+    const p = freshClog(() => Promise.resolve({ status }));
+    p.clog("begin", {});
+    p.clogFlush();
+    await flushMicrotasks();
+    assert.equal(p.CLOG.q.length, 0, "status " + status);
+  }
+});
+
+test("entries logged while a batch was failing keep their order behind it", async () => {
+  const p = freshClog(() => Promise.reject(new Error("offline")));
+  p.clog("begin", {});
+  p.clogFlush();
+  p.clog("beginFail", {});          // arrives while the POST is in flight
+  await flushMicrotasks();
+  assert.deepEqual(p.CLOG.q.map(e => e.type), ["begin", "beginFail"]);
+});
+
+test("a queue that keeps failing stays bounded", async () => {
+  const p = freshClog(() => Promise.reject(new Error("offline")));
+  for (let i = 0; i < 260; i++) p.clog("sdk", { i });
+  p.clogFlush();                                       // takes 50 off the queue
+  for (let i = 0; i < 100; i++) p.clog("sdk", { i });  // more arrive while it is in flight
+  await flushMicrotasks();                             // ...and the 50 come back
+  assert.equal(p.CLOG.q.length, 200);
+});
+
+test("the shuffle-after-handoff call reports whether the device accepted it", async () => {
+  const build = apiImpl => new Function("shuffleAfter", "api",
+    extractFunction("applyShufflePreference") + "\nreturn applyShufflePreference;")(
+    () => true, apiImpl);
+  assert.equal(await build(async () => null)("dev9"), true);
+  assert.equal(await build(async () => { throw new Error("Spotify 403"); })("dev9"), false,
+    "a rejection must be reported, so the handoff entry can record it");
+});
+
+/* ---- doHandoff records what it did, success included ---- */
+
+function freshHandoff({ play = async () => null, shuffleOk = true, wantShuffle = false,
+                        key = "pl1" } = {}) {
+  const logged = [], toasts = [], calls = [];
+  const el = () => ({ style: {}, innerHTML: "", onclick: null });
+  const factory = new Function(
+    "$", "livePosition", "startupAllowance", "W", "performance", "api", "target", "sdk",
+    "setTimeout", "LSD", "applyShufflePreference", "clog", "shuffleAfter", "openSpotifyApp",
+    "esc", "toast",
+    extractFunction("handoffBody") + "\n" + extractFunction("doHandoff") + "\nreturn doHandoff;");
+  const doHandoff = factory(el,
+    async () => ({ pos: 1000, at: 0, ctx: "spotify:webapi", uri: "spotify:track:now" }),
+    () => 550, { key }, { now: () => 0 },
+    async (path, opts) => { calls.push({ path, body: opts && opts.body }); return play(path); },
+    "sdk", { pause: async () => {} }, () => 0, { set: () => {} },
+    async () => shuffleOk, (type, data) => logged.push({ type, data }),
+    () => wantShuffle, () => {}, s => s, m => toasts.push(m));
+  return { doHandoff, logged, toasts, calls };
+}
+
+test("a successful handoff is logged with what was sent and whether shuffle took", async () => {
+  /* The handoff was broken from 2026-11-11 to 2026-11-14 and the log held nothing that
+   * said a handoff had even been attempted. Success is logged too, so "it worked" is a
+   * reading and not an inference from the absence of an error. */
+  const h = freshHandoff({ wantShuffle: true, shuffleOk: true });
+  await h.doHandoff("dev9", "Phone");
+  const entries = h.logged.filter(l => l.type === "handoff");
+  assert.equal(entries.length, 1);
+  assert.deepEqual({ ...entries[0].data, ms: 0 },
+    { ok: true, mode: "playlist", shuffle: true, shuffleOk: true, ms: 0 });
+  assert.equal(h.calls[0].body.context_uri, "spotify:playlist:pl1");
+});
+
+test("a failed handoff is logged with Spotify's answer, and the user is told", async () => {
+  const h = freshHandoff({ play: async () => { throw new Error("Spotify 400"); } });
+  await h.doHandoff("dev9", "Phone");
+  const entries = h.logged.filter(l => l.type === "handoff");
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].data.ok, false);
+  assert.equal(entries[0].data.msg, "Spotify 400");
+  assert.equal(entries[0].data.mode, "playlist", "what was ATTEMPTED is still recorded");
+  assert.match(h.toasts[0], /Handoff failed: Spotify 400/);
+});
+
+test("a handoff that could only move the current track says so in the log", async () => {
+  // scripts/clientlog.py warns on any mode but "playlist": playback will not carry on.
+  const h = freshHandoff({ key: null });
+  await h.doHandoff("dev9", "Phone");
+  assert.equal(h.logged.find(l => l.type === "handoff").data.mode, "track");
+  assert.deepEqual(h.calls[0].body.uris, ["spotify:track:now"]);
+});
+
+test("a rejected shuffle call is recorded without failing the handoff", async () => {
+  const h = freshHandoff({ wantShuffle: true, shuffleOk: false });
+  await h.doHandoff("dev9", "Phone");
+  const d = h.logged.find(l => l.type === "handoff").data;
+  assert.equal(d.ok, true);
+  assert.equal(d.shuffleOk, false);
 });

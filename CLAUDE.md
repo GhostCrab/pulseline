@@ -10,12 +10,16 @@ Pulseline lines up a Spotify playlist against a programmed interval workout. No 
 python3 server.py                   # local server: open http://127.0.0.1:8888/ (not localhost: Spotify's redirect URI must match exactly)
 python3 scripts/check.py            # all mechanical checks; ESLint included after `npm install`
 python3 scripts/test.py             # behaviour tests (state API, analysis-core, clientlog reader)
-python3 scripts/clientlog.py          # what a real device saw (newest log, latest session)
+python3 scripts/clientlog.py          # what a real device saw (newest log, latest session); --timeline for the entries in order
 python3 scripts/mutate.py <file> <old> <new>   # prove a test can fail; green is the failure
 bash scripts/pull-log.sh            # copy the newest client log down from the Pi (read-only)
 bash scripts/hitl-workout.sh        # prerequisites + sequence for a device pass
-git config core.hooksPath .githooks # once per clone: run check.py + test.py on every commit
+git config core.hooksPath .githooks # once per clone: check.py + test.py on every commit, and the commit-msg check below
 ```
+
+On Windows type `python`, not `python3`: `python3` there is the Store stub and exits 49.
+
+A commit that changes the playback path in `workout.html` is refused unless its message accounts for each step of the sequence; the refusal prints the format (`scripts/commit_msg.py`).
 
 ## Environments
 
@@ -27,9 +31,9 @@ Develop and test on the build/test machine against the local server. Production 
 - **`docs/adr/`**: decisions not to re-litigate. Read before proposing a refactor.
 - **`docs/agents/spotify-api.md`**: read before any change that calls Spotify. Endpoints, fields and scopes come from `docs/spotify/open-api-schema.yaml`; grep it.
 - **`CODING_STANDARDS.md`**: the review rules.
-- **`data/clientlog-<ns>.jsonl`**: what real devices reported (Spotify player events, API failures). Read it first when playback misbehaves; `debug/sdk-probe.html` probes the in-app player directly.
+- **`data/clientlog-<ns>.jsonl`**: what real devices reported (Spotify player events, API failures). Read it first when playback misbehaves. Then watch the real player: `workout.html?probe=1` on the local server loads `debug/start-probe.js` (every SDK event and Spotify call, with timings and fault injection); `debug/sdk-probe.html` probes the in-app player on its own.
 - Auth and `api()` code is duplicated in every page on purpose; a change to one copy applies to all. `scripts/check.py`'s `copies` check enforces the response-handling part.
-- **Edit the pages with the Edit/Write tools, not with `python - <<EOF` or `sed`.** These are 70-96KB files of inline `<script>`, and escaping through a shell heredoc into Python into JavaScript corrupted a file four times in one session.
+- **Write JavaScript with the Edit/Write tools: the pages, the shared `.js` and the tests alike. Keep it out of shell heredocs, `python - <<EOF` and `sed`.** Escaping through a shell into JavaScript corrupted a page four times in one session and broke a test-file append in another.
 
 ## Agent skills
 

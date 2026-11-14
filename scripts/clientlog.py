@@ -326,6 +326,53 @@ def findings(records, bad=()):
             rule="DEVELOPING.md Hotspots 2",
             evidence=[{"t": _when(rec), "label": rec.get("label"), "msg": rec.get("msg")}]))
 
+    # --- the handoff at the end of a workout ------------------------------------------
+    # Logged on success as well as failure. It was broken for three days with nothing
+    # here to say a handoff had been attempted at all.
+    for rec in _of_type(records, "handoff"):
+        ev = {"t": _when(rec), "mode": rec.get("mode"), "ms": rec.get("ms")}
+        if rec.get("ok") is False:
+            out.append(Finding(
+                HIGH, "handoff-fail",
+                "The handoff to the Spotify app failed: %s. Nothing was handed off, so "
+                "Spotify still shows Pulseline as the player." % (rec.get("msg") or "(no message)"),
+                rule="spotify-api.md quirk 4 (handoffBody)", evidence=[ev]))
+            continue
+        if rec.get("mode") != "playlist":
+            out.append(Finding(
+                WARN, "handoff-not-playlist",
+                "The handoff moved %s rather than the workout's playlist, so playback "
+                "will not carry on into the rest of it."
+                % ("a single track" if rec.get("mode") == "track" else "the player by a plain transfer"),
+                evidence=[ev]))
+        elif rec.get("shuffle") and rec.get("shuffleOk") is False:
+            out.append(Finding(
+                WARN, "handoff-shuffle-rejected",
+                "The handoff succeeded but the device rejected turning shuffle on, which "
+                "the shuffle-after-handoff setting asked for.", evidence=[ev]))
+        else:
+            out.append(Finding(
+                INFO, "handoff-ok",
+                "Handed off to the workout's playlist%s."
+                % (", shuffle on" if rec.get("shuffle") else ", shuffle off"),
+                evidence=[ev]))
+
+    # --- a START that never resolved either way ---------------------------------------
+    # Every start ends in exactly one of playAck, beginFail or beginAbandoned. None of
+    # them means the request was still in flight when the log stops: a hang, or the page
+    # was closed first. Only judged for builds that log `rev` on begin, because older
+    # builds never logged playAck and every one of their runs would look unresolved.
+    for run in split_runs(records):
+        first = run[0]
+        if first.get("type") != "begin" or "rev" not in first or first.get("target") is None:
+            continue
+        if not any(r.get("type") in ("playAck", "beginFail", "beginAbandoned") for r in run):
+            out.append(Finding(
+                WARN, "start-unresolved",
+                "A run began but its play request was never answered, failed or "
+                "abandoned in this log: it was still in flight when the entries stop.",
+                evidence=[{"t": _when(first), "rev": first.get("rev")}]))
+
     # --- a run that began but never saw the player become ready --------------------
     begins = _of_type(records, "begin")
     sdk_begins = [r for r in begins if r.get("target") == "sdk"]
@@ -340,7 +387,7 @@ def findings(records, bad=()):
     # --- token trouble --------------------------------------------------------------
     auth = _of_type(records, "auth")
     if auth:
-        by = collections.Counter((r.get("grant"), r.get("status")) for r in auth)
+        by = collections.Counter((_label(r.get("grant")), _label(r.get("status"))) for r in auth)
         for (grant, status), n in sorted(by.items(), key=lambda kv: -kv[1]):
             sev = HIGH if status in (400, 401) and n > 2 else WARN
             out.append(Finding(
@@ -353,7 +400,8 @@ def findings(records, bad=()):
     # --- API failures that survived the retry ladder --------------------------------
     api = _of_type(records, "api")
     if api:
-        by = collections.Counter((r.get("method"), r.get("path"), r.get("status")) for r in api)
+        by = collections.Counter(
+            (_label(r.get("method")), _label(r.get("path")), _label(r.get("status"))) for r in api)
         for (method, path, status), n in sorted(by.items(), key=lambda kv: -kv[1]):
             out.append(Finding(
                 WARN if status != 429 else INFO, "api-failure",
@@ -371,9 +419,18 @@ def findings(records, bad=()):
     return out
 
 
+def _label(value):
+    """A log field used as a label, made safe to count and print. The log is written by
+    browsers and by debug tools, so `page` and `type` are whatever arrived: a probe once
+    wrote an object into `page` and the reader died counting it."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return json.dumps(value, ensure_ascii=True)[:40]
+
+
 def summarise(records):
-    types = collections.Counter(r.get("type") for r in records)
-    pages = collections.Counter(r.get("page") for r in records)
+    types = collections.Counter(_label(r.get("type")) for r in records)
+    pages = collections.Counter(_label(r.get("page")) for r in records)
     times = [_when(r) for r in records if _when(r)]
     return {"entries": len(records), "types": dict(types), "pages": dict(pages),
             "first": min(times) if times else None, "last": max(times) if times else None}
@@ -457,7 +514,36 @@ def _window(records):
     return "%s, lasting %dm %02ds" % (when, span // 60, span % 60)
 
 
-def report(path, as_json=False, scope="last"):
+TIMELINE_GAP_MS = 2 * 60 * 1000   # a chosen value: quiet for this long gets its own line
+TIMELINE_DROP = ("t", "srv", "page", "type", "ua")   # shown in the prefix, or noise
+TIMELINE_WIDTH = 240
+
+
+def timeline(records):
+    """One line per entry in time order, with a marker wherever the log goes quiet.
+
+    The findings say what a session MEANT; this says what happened, in order, which is
+    what locating a fault needs - both diagnoses on 2026-11-14 came from reading the
+    entries in sequence, with a throwaway printer written twice."""
+    lines, prev = [], None
+    for rec in sorted(records, key=_when):
+        t = _when(rec)
+        if prev and t and t - prev > TIMELINE_GAP_MS:
+            lines.append("    ---- %.1f min with no entries ----" % ((t - prev) / 60000))
+        prev = t or prev
+        stamp = time.strftime("%m-%d %H:%M:%S", time.localtime(t / 1000)) if t else "(no time)     "
+        rest = {k: v for k, v in rec.items() if k not in TIMELINE_DROP}
+        body = json.dumps(rest, separators=(",", ":"), ensure_ascii=True) if rest else ""
+        if len(body) > TIMELINE_WIDTH:
+            body = body[:TIMELINE_WIDTH - 3] + "..."
+        where = _label(rec.get("page"))
+        page = "" if where in (None, "workout") else "[%s] " % where
+        lines.append("%s.%03d  %s%-12s %s"
+                     % (stamp, t % 1000, page, _label(rec.get("type")) or "?", body))
+    return lines
+
+
+def report(path, as_json=False, scope="last", show_timeline=False, expect=()):
     with open(path, encoding="utf-8", errors="replace") as f:
         records, bad = parse_lines(f.read())
 
@@ -468,7 +554,25 @@ def report(path, as_json=False, scope="last"):
     else:
         chosen, note = records, ("all %d session(s)" % max(1, len(sessions)))
 
-    found = sorted(findings(chosen, bad), key=lambda f_: SEV_ORDER[f_.severity])
+    if show_timeline:
+        print("%s" % rel(path))
+        print("  %s - %s" % (_window(chosen), note))
+        print()
+        for line in timeline(chosen):
+            print(line)
+        return 0
+
+    found = findings(chosen, bad)
+    # A pass that was supposed to exercise something must have left its entry: without
+    # this, "no findings" is also what a step that never ran looks like.
+    seen = {_label(r.get("type")) for r in chosen}
+    for type_ in expect:
+        if type_ not in seen:
+            found.append(Finding(
+                HIGH, "expected-missing",
+                "No `%s` entry in this session, so that step was not exercised (or its "
+                "log batch never arrived). The pass does not cover it." % type_))
+    found = sorted(found, key=lambda f_: SEV_ORDER[f_.severity])
     summary = summarise(chosen)
 
     if as_json:
@@ -480,8 +584,8 @@ def report(path, as_json=False, scope="last"):
         print("  %s - %s" % (_window(chosen), note))
         print("  %d entries, %d unreadable" % (summary["entries"], len(bad)))
         if summary["types"]:
-            print("  events: " + ", ".join("%s x%d" % kv
-                                           for kv in sorted(summary["types"].items())))
+            print("  events: " + ", ".join("%s x%d" % kv for kv in sorted(
+                summary["types"].items(), key=lambda kv: str(kv[0]))))
         print()
         for f_ in found:
             print("[%s] %s" % (f_.severity, f_.message))
@@ -513,6 +617,11 @@ def main():
                     help="report every session in the log, not just the latest")
     ap.add_argument("--list", action="store_true", help="list the logs that exist")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
+    ap.add_argument("--timeline", action="store_true",
+                    help="print the entries in time order instead of the findings")
+    ap.add_argument("--expect", action="append", default=[], metavar="TYPE",
+                    help="fail if the session has no entry of this type (repeatable), "
+                         "e.g. --expect handoff after a device pass")
     args = ap.parse_args()
 
     logs = find_logs()
@@ -542,7 +651,8 @@ def main():
         print("no such file: %s" % path, file=sys.stderr)
         return 2
 
-    return report(path, args.json, "all" if args.all else "last")
+    return report(path, args.json, "all" if args.all else "last",
+                  show_timeline=args.timeline, expect=args.expect)
 
 
 if __name__ == "__main__":

@@ -49,6 +49,16 @@ Structural assertions over source text are the sharp case. Strip comments first,
 assert the thing sits **inside** the construct rather than merely later in the file than
 it.
 
+**A structural assertion may pin order or placement, and nothing else.** "The reschedule
+sits inside the `finally`" is placement. "The source contains `p.ctx||`" is behaviour
+written as a string match, and it pinned a bug in place: that expression was the handoff
+defect, and the test asserting it stayed green for the three days the handoff was broken.
+Anything with an input and an output is lifted into a pure function and tested by what it
+returns, as `playBody` and `handoffBody` are.
+
+Review question: does a new `assert.match` over source text describe *where* something
+is, or *what it computes*? The second is a behaviour test that has not been written yet.
+
 Review question: for each new assertion, does the diff name the mutation that breaks it?
 If the answer is "it passes", that is not an answer.
 
@@ -65,8 +75,34 @@ than no diagnostic.
 
 Review question: what input makes this report nothing, and is that input tested?
 
+## State from outside is shown to be about us
+
+Code that acts on what a player reports says how it knows the report postdates our own
+command. The in-app player describes the *previous* session until our play lands (paused,
+the old track, the old position), and acting on that snapped the clock, raised a shuffle
+warning over silence and paused a workout that had not begun
+(`docs/agents/spotify-api.md` quirk 11). `onSdkState()` and `reviveSession()` gate on
+`W.playSent` / `W.heard`. The Spotify-app poll in `startPoll()` has no such gate yet.
+
+Review question: for each handler of player state, what stops it acting on state left
+over from before the command it is meant to be following?
+
+## A reported value is not sent back unchecked
+
+A value Spotify *reported* is a reading, not a valid argument. The handoff sent the
+player's reported context back as `context_uri`; after a track-list start that context is
+the placeholder `spotify:webapi`, and Spotify answered `400 Invalid context uri`. Prefer
+the value we already hold (the workout's own playlist); where a reported value must be
+used, check it against the forms `docs/spotify/open-api-schema.yaml` allows first.
+
 ## The fragile path is re-verified end to end
 
 A diff touching `workout.html`'s `beginPlayback()`, pause handling, completion or handoff, or the
-token code under them, states in the PR or commit how the whole sequence was re-verified: start,
-pause, external pause, finish, completion card, handoff.
+token code under them, states in the commit how each step of the sequence was re-verified:
+start, pause, external pause, finish, completion card, handoff.
+
+This is enforced: `.githooks/commit-msg` refuses such a commit unless the message carries
+one `yes`/`no` line per step with its evidence or reason (`scripts/commit_msg.py` holds the
+function list and prints the format). `no` is an acceptable answer; an unaccounted step is
+not. What is left for review is whether the evidence is real: "yes - tests pass" does not
+verify a step that only a device can exercise.

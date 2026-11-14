@@ -678,6 +678,166 @@ class TestDiscoveryAndSessions(unittest.TestCase):
         self.assertEqual(every, 1, "--all still finds the earlier failure")
 
 
+class TestHandoff(unittest.TestCase):
+    """Shapes from workout.html doHandoff: {ok, mode, shuffle, shuffleOk, ms} on success,
+    {ok:false, mode, msg, ms} on failure."""
+
+    def test_a_failed_handoff_is_HIGH_and_carries_spotifys_message(self):
+        # The field failure of 2026-11-14: `400 Invalid context uri`, nothing handed off.
+        found = by_code([entry("handoff", ok=False, mode="playlist", msg="Spotify 400")],
+                        "handoff-fail")
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].severity, clientlog.HIGH)
+        self.assertIn("Spotify 400", found[0].message)
+
+    def test_a_clean_playlist_handoff_is_only_informational(self):
+        # CODING_STANDARDS: a finding says nothing about a healthy run.
+        for shuffle in (True, False):
+            found = clientlog.findings(
+                [entry("handoff", ok=True, mode="playlist", shuffle=shuffle, shuffleOk=True)])
+            self.assertEqual([f.code for f in found], ["handoff-ok"])
+            self.assertEqual(found[0].severity, clientlog.INFO)
+            self.assertIn("shuffle on" if shuffle else "shuffle off", found[0].message)
+
+    def test_a_handoff_that_moved_only_one_track_is_a_warning(self):
+        for mode in ("track", "transfer"):
+            found = by_code([entry("handoff", ok=True, mode=mode, shuffle=False, shuffleOk=True)],
+                            "handoff-not-playlist")
+            self.assertEqual(len(found), 1, mode)
+            self.assertEqual(found[0].severity, clientlog.WARN)
+
+    def test_a_rejected_shuffle_matters_only_when_shuffle_was_wanted(self):
+        wanted = [entry("handoff", ok=True, mode="playlist", shuffle=True, shuffleOk=False)]
+        self.assertEqual(codes(wanted), ["handoff-shuffle-rejected"])
+        unwanted = [entry("handoff", ok=True, mode="playlist", shuffle=False, shuffleOk=False)]
+        self.assertEqual(codes(unwanted), ["handoff-ok"])
+
+    def test_no_handoff_entry_reports_nothing_by_default(self):
+        self.assertNotIn("handoff-fail", codes([entry("sdk", ev="ready")]))
+
+
+class TestStartResolution(unittest.TestCase):
+    def begin(self, t=1000, **kw):
+        return entry("begin", t=t, target="sdk", streamScope=True, rev="abc1234", **kw)
+
+    def test_a_start_with_no_answer_at_all_is_flagged(self):
+        # 2026-11-13: begin, playStart, then nothing for 10-19s, three times running.
+        records = [entry("sdk", t=900, ev="ready"), self.begin(), entry("playStart", t=1001)]
+        found = by_code(records, "start-unresolved")
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].severity, clientlog.WARN)
+
+    def test_each_way_a_start_can_end_resolves_it(self):
+        for ending in ("playAck", "beginFail", "beginAbandoned"):
+            records = [entry("sdk", t=900, ev="ready"), self.begin(), entry(ending, t=1200)]
+            self.assertNotIn("start-unresolved", codes(records), ending)
+
+    def test_runs_are_judged_separately(self):
+        records = [entry("sdk", t=900, ev="ready"),
+                   self.begin(t=1000), entry("playAck", t=1200, ms=200),
+                   self.begin(t=5000)]
+        self.assertEqual(len(by_code(records, "start-unresolved")), 1)
+
+    def test_a_build_that_predates_playAck_is_not_judged(self):
+        # Older builds never logged playAck, so every one of their runs would be "unresolved".
+        old = [entry("sdk", t=900, ev="ready"),
+               entry("begin", t=1000, target="sdk", streamScope=True)]
+        self.assertNotIn("start-unresolved", codes(old))
+
+    def test_a_null_rev_still_counts_as_a_new_build(self):
+        # The page logs rev:null until /api/version answers; the KEY is what marks the build.
+        records = [entry("sdk", t=900, ev="ready"),
+                   entry("begin", t=1000, target="sdk", streamScope=True, rev=None)]
+        self.assertIn("start-unresolved", codes(records))
+
+
+class TestTimelineAndExpect(unittest.TestCase):
+    def test_entries_come_out_in_time_order_with_their_fields(self):
+        lines = clientlog.timeline([entry("playAck", t=2000, ms=210),
+                                    entry("begin", t=1000, target="sdk")])
+        self.assertEqual(len(lines), 2)
+        self.assertIn("begin", lines[0])
+        self.assertIn('"target":"sdk"', lines[0])
+        self.assertIn("playAck", lines[1])
+        self.assertIn('"ms":210', lines[1])
+
+    def test_a_quiet_stretch_gets_its_own_line(self):
+        gap = clientlog.TIMELINE_GAP_MS
+        lines = clientlog.timeline([entry("begin", t=1000), entry("begin", t=1000 + gap + 60000)])
+        self.assertEqual(len(lines), 3)
+        self.assertIn("with no entries", lines[1])
+
+    def test_entries_close_together_get_no_marker(self):
+        lines = clientlog.timeline([entry("begin", t=1000), entry("playAck", t=1300)])
+        self.assertEqual(len(lines), 2)
+
+    def test_the_user_agent_is_left_out_and_long_entries_are_cut(self):
+        lines = clientlog.timeline([entry("begin", ua="Mozilla/5.0 " * 20, msg="x" * 1000)])
+        self.assertNotIn("Mozilla", lines[0])
+        self.assertTrue(lines[0].endswith("..."))
+
+    def test_another_pages_entries_are_labelled(self):
+        lines = clientlog.timeline([entry("probe", page="start-probe", ev="tap")])
+        self.assertIn("[start-probe]", lines[0])
+
+    def _report(self, records, **kw):
+        import contextlib, io, tempfile
+        d = tempfile.mkdtemp(prefix="pulseline-clog-")
+        path = os.path.join(d, "clientlog-u_x.jsonl")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(jsonl(*records))
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                code = clientlog.report(path, **kw)
+        finally:
+            import shutil
+            shutil.rmtree(d, ignore_errors=True)
+        return code, buf.getvalue()
+
+    def test_an_expected_entry_that_is_missing_fails_the_report(self):
+        # hitl-workout.sh passes --expect handoff: a pass that never reached the handoff
+        # must not read as a clean pass.
+        clean = [entry("sdk", t=900, ev="ready")]
+        code, out = self._report(clean, expect=["handoff"])
+        self.assertEqual(code, 1)
+        self.assertIn("No `handoff` entry", out)
+
+    def test_an_expected_entry_that_is_present_does_not_fail_it(self):
+        records = [entry("sdk", t=900, ev="ready"),
+                   entry("handoff", ok=True, mode="playlist", shuffle=False, shuffleOk=True)]
+        code, out = self._report(records, expect=["handoff"])
+        self.assertEqual(code, 0)
+        self.assertNotIn("expected", out)
+
+    def test_REGRESSION_a_label_that_is_not_a_string_does_not_crash_the_reader(self):
+        """debug/start-probe.js wrote an object into `page` and the reader died with
+        `TypeError: unhashable type: 'dict'` while counting pages - on the first real
+        log it was pointed at. The log is written by browsers; nothing in it is typed."""
+        odd = [entry("sdk", t=900, ev="ready"),
+               {"t": 1000, "page": {"clock": 0, "btn": "PAUSE"}, "type": "probe"},
+               {"t": 1100, "page": "workout", "type": ["not", "a", "string"]},
+               {"t": 1200, "page": "workout"},
+               {"t": 1300, "page": "workout", "type": "api", "method": "PUT",
+                "path": ["/me/player"], "status": {"code": 500}},
+               {"t": 1400, "page": "workout", "type": "auth", "grant": ["x"], "status": 400}]
+        code, out = self._report(odd, expect=["sdk"])
+        self.assertEqual(code, 0)
+        self.assertIn("6 entries", out)
+        _, shown = self._report(odd, show_timeline=True)
+        self.assertEqual(len([l for l in shown.splitlines() if l[:2].isdigit()]), 6)
+
+    def test_nothing_is_expected_by_default(self):
+        code, _ = self._report([entry("sdk", t=900, ev="ready")])
+        self.assertEqual(code, 0)
+
+    def test_the_timeline_view_prints_entries_and_never_fails(self):
+        records = [entry("handoff", ok=False, mode="playlist", msg="Spotify 400")]
+        code, out = self._report(records, show_timeline=True)
+        self.assertEqual(code, 0, "the timeline is a view, not a verdict")
+        self.assertIn("Spotify 400", out)
+
+
 def _w(rec):
     return clientlog._when(rec)
 

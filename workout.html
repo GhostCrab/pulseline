@@ -348,16 +348,36 @@ function clog(type,data){
     clearTimeout(CLOG.t);CLOG.t=setTimeout(clogFlush,1500);
   }catch(e){}
 }
+/* A batch that could not be delivered goes BACK on the queue. It used to be dropped, so
+   the log was thinnest exactly when the network was bad - which is when it is read: on
+   2026-11-13 three STARTs were each followed by 10-19s of nothing, and it could not be
+   told whether the calls hung or the entries were lost. Requeued on a network error or
+   a 5xx only; a 4xx means the server refused the batch and resending cannot help.
+   If the server stored the batch and only the answer was lost, the entries appear twice;
+   a duplicate is the cheaper error. CLOG_RETRY_MS is a chosen value. */
+const CLOG_RETRY_MS=5000;
 function clogFlush(){
   try{
     const ns=LSD.get("ns",null);if(!ns||!CLOG.q.length)return;
     const entries=CLOG.q.splice(0,50);
+    const requeue=()=>{
+      CLOG.q.unshift(...entries);
+      if(CLOG.q.length>200)CLOG.q.splice(0,CLOG.q.length-200);
+      clearTimeout(CLOG.t);CLOG.t=setTimeout(clogFlush,CLOG_RETRY_MS);
+    };
     fetch("/api/log/"+encodeURIComponent(ns),{method:"POST",keepalive:true,
-      headers:{"Content-Type":"application/json"},body:JSON.stringify({entries})}).catch(()=>{});
+      headers:{"Content-Type":"application/json"},body:JSON.stringify({entries})})
+      .then(r=>{if(r.status>=500)requeue()},requeue);
     if(CLOG.q.length)CLOG.t=setTimeout(clogFlush,1500);
   }catch(e){}
 }
 addEventListener("pagehide",clogFlush);
+/* Which commit served this page, asked once at load and stamped on every `begin`, so a
+   log says what code the device was actually running. null until it answers, and for
+   good against a server that predates /api/version. */
+let BUILD=null;
+fetch("/api/version",{cache:"no-store"}).then(r=>r.ok?r.json():null)
+  .then(j=>{BUILD=(j&&j.rev)||null}).catch(()=>{});
 
 /* ---------- containment for the run loop ----------
    Under "use strict", moving or deleting a block orphans an identifier it defined and
@@ -892,7 +912,8 @@ async function applyShufflePreference(deviceId){
   try{
     await api(`/me/player/shuffle?state=${want}`+(deviceId?"&device_id="+encodeURIComponent(deviceId):""),
       {method:"PUT"});
-  }catch(e){ /* some devices reject it; not worth failing the handoff over */ }
+    return true;
+  }catch(e){return false}   // some devices reject it; not worth failing the handoff over, but it is logged
 }
 const DEFAULT_START_MS=550;
 function startupAllowance(){
@@ -933,12 +954,15 @@ function handoffBody(p,playlistKey){
 }
 async function doHandoff(deviceId,name){
   const list=$("#handoffList");
+  const startedAt=performance.now();
+  let mode="transfer";                  // what was asked of the target; logged either way
   try{
     const p=await livePosition();
     let seamless=false;
     if(p&&p.uri){
       const lead=startupAllowance();
       const body=handoffBody(p,W&&W.key);
+      mode=body.context_uri?"playlist":"track";
       /* computed at the moment of sending, so the reading's own age is included */
       body.position_ms=Math.max(0,Math.round(p.pos+(performance.now()-p.at)+lead));
       const sentAt=performance.now(),wanted=body.position_ms;
@@ -964,7 +988,12 @@ async function doHandoff(deviceId,name){
       await api("/me/player",{method:"PUT",body:{device_ids:[deviceId],play:true}});
       try{await api("/me/player/play?device_id="+encodeURIComponent(deviceId),{method:"PUT"})}catch(e){}
     }
-    await applyShufflePreference(deviceId);
+    const shuffleOk=await applyShufflePreference(deviceId);
+    /* One entry per handoff, success included. The handoff was broken for three days
+       with nothing in the log saying a handoff had even been tried; it was found only
+       because the 400 happened to be recorded as a generic API failure. */
+    clog("handoff",{ok:true,mode,shuffle:shuffleAfter(),shuffleOk,
+      ms:Math.round(performance.now()-startedAt)});
     openSpotifyApp();
     $("#handoffBtn").style.display="none";$("#handoffOther").style.display="none";
     list.innerHTML=`<div class="note">Handed off to <b>${esc(name)}</b>${seamless?"":" (position may jump slightly)"}${
@@ -977,6 +1006,7 @@ async function doHandoff(deviceId,name){
     };
     toast("Playing on "+name,4000);
   }catch(e){
+    clog("handoff",{ok:false,mode,msg:e.message,ms:Math.round(performance.now()-startedAt)});
     toast("Handoff failed: "+e.message+". Open Spotify on that device and try again.",5000);
   }
 }
@@ -1084,7 +1114,7 @@ async function beginPlayback(){          // called from the START tap (a user ge
      run) and the oldest one's failure marking the NEWEST run simulated (data/clientlog,
      2026-11-13). So every await below is followed by a check that W is still this run. */
   const run=W;
-  clog("begin",{target,streamScope:hasStreamScope(),ua:navigator.userAgent});
+  clog("begin",{target,streamScope:hasStreamScope(),rev:BUILD,ua:navigator.userAgent});
   try{
     let q="",devId=null;
     if(target==="sdk"){
@@ -1123,7 +1153,11 @@ async function beginPlayback(){          // called from the START tap (a user ge
       toast("Couldn't turn shuffle off in Spotify, and this playlist is too long to start track by track — the timeline may not match",7000);
     }
     run.playSent=true;                  // from here the SDK's state is about OUR playback (onSdkState)
+    const playSentAt=performance.now();
     await api("/me/player/play"+q,{method:"PUT",body});
+    /* Success is logged too, with how long it took: without it a START followed by
+       silence in the log cannot be told from a request that is still hanging. */
+    clog("playAck",{ms:Math.round(performance.now()-playSentAt)});
     if(W!==run){clog("beginAbandoned",{before:"linear"});return true}
     /* A uris start: repeat still has to be off (repeat=track would loop the first song
        and desync the clock), but it takes effect whenever it lands, so it follows play
@@ -1503,6 +1537,12 @@ const NEEDS_SYNC=2;
       'Copy the current <b>sync-core.js</b>, restart server.py, then hard-refresh '+
       '(<b>Ctrl+Shift+R</b>).</span>';
     return;
+  }
+  /* Developer aid: workout.html?probe=1 on the local dev server loads the START-sequence
+     probe (docs/DEVELOPING.md, "Verifying the playback path"). Loopback only, so the
+     query string does nothing on the deployed site. */
+  if(/[?&]probe=1(&|$)/.test(location.search)&&/^(127\.0\.0\.1|localhost)$/.test(location.hostname)){
+    const s=document.createElement("script");s.src="debug/start-probe.js";document.head.append(s);
   }
   try{
     if(location.search.includes("code=")&&AUTH.clientId){

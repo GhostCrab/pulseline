@@ -58,8 +58,11 @@ for c in python3 python py; do
 done
 [ -n "$PY" ] || { echo "no working Python found (tried python3, python, py)"; exit 1; }
 
+# --expect: the sequence ends in a handoff, and a pass that never reached it must not read
+# as a clean pass. The handoff was broken for three days while passes that stopped at the
+# completion card came back with no findings.
 if ls data/clientlog-*.jsonl >/dev/null 2>&1; then
-  exec "$PY" scripts/clientlog.py
+  exec "$PY" scripts/clientlog.py --expect begin --expect playAck --expect handoff
 fi
 
 cat <<'EOF'

@@ -1,0 +1,15 @@
+#!/bin/sh
+# Pulseline commit-msg guardrail. Enabled by the same one-off as pre-commit:
+#   git config core.hooksPath .githooks
+# A commit that changes the fragile playback path in workout.html must account, step by
+# step, for how the sequence was re-verified. The rule and its reason are in
+# scripts/commit_msg.py.
+cd "$(git rev-parse --show-toplevel)" || exit 1
+# Same interpreter probe as pre-commit: on Windows `python3` is a Store stub that exists
+# on PATH and exits 49.
+PY=
+for c in python3 python py; do
+  if "$c" -c "import sys" >/dev/null 2>&1; then PY="$c"; break; fi
+done
+[ -n "$PY" ] || { echo "commit-msg: no working Python found (tried python3, python, py)"; exit 1; }
+exec "$PY" scripts/commit_msg.py "$1"

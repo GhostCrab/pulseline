@@ -1,6 +1,7 @@
 /* START-sequence probe for workout.html, against the REAL Web Playback SDK.
  *
- * Debug tooling, never loaded by the app. Inject it into an open workout.html:
+ * Debug tooling. On the local dev server, open workout.html?probe=1 and the page loads
+ * it. Anywhere else, inject it into an open workout.html by hand:
  *
  *   const s=document.createElement("script");s.src="/debug/start-probe.js";document.head.append(s)
  *
@@ -13,7 +14,8 @@
  *   __probe.faults.push({match:/\/me\/player$/, status:500})      // never reaches Spotify
  *
  * Then pick a workout and tap START by hand (a real tap: script clicks are not a user
- * gesture), wait, and read __probe.report().
+ * gesture), wait, and read __probe.report() - or `await __probe.save()` to write the run
+ * into the client log and read it with `python scripts/clientlog.py --timeline`.
  *
  * Why position and not the API's word for it: PUT /me/player/play answers 204 and
  * /me/player says is_playing:true while the in-browser player is silent
@@ -132,6 +134,7 @@
       }
     }
     return {
+      startTapMs: T,
       callsBeforePlay: run.filter(e => e.kind === "api>" && (!playSent || e.t < playSent.t))
         .map(e => e.method + " " + e.path),
       msStartToPlaySent: rel(playSent),
@@ -149,6 +152,40 @@
     };
   }
 
-  window.__probe = { ev, faults, report, page };
+  /* Write the most recent START to the server's client log, so it is read as a file
+   * (`python scripts/clientlog.py --timeline`) instead of through a browser tool that
+   * truncates long output. One log entry per event, because server.py cuts each line at
+   * 2000 chars and takes 50 entries a request; runs of identical SDK states are collapsed
+   * to their first, and a summary entry goes last. Resolves to the number written. */
+  async function save() {
+    const r = report();
+    if (r.error) return 0;
+    let ns = null;
+    try { ns = JSON.parse(localStorage.getItem("pl_ns")); } catch (e) { /* not logged in */ }
+    if (!ns) return 0;
+    const same = (a, b) => a.kind === "sdk:state" && b.kind === "sdk:state"
+      && a.paused === b.paused && a.loading === b.loading && a.idx === b.idx;
+    // Wall-clock time of the START tap: the probe's own zero, plus the tap's offset from it.
+    const base = (Date.now() - now()) + r.startTapMs;
+    const entries = r.timeline.filter((e, i, a) => !(i && same(a[i - 1], e))).map(e => {
+      /* Events carry the page snapshot under `page`, which is the log's own field for
+         WHICH page wrote the entry - so it goes out as `view`, and the fixed fields are
+         written last where nothing in the event can overwrite them. */
+      const { t, kind, page: view, ...rest } = e;
+      return { ...rest, ...(view ? { view } : {}), t: base + t, at: t, ev: kind,
+        page: "start-probe", type: "probe" };
+    });
+    const { timeline, ...summary } = r;
+    entries.push({ ...summary, t: base + (timeline.length ? timeline[timeline.length - 1].t : 0) + 1,
+      page: "start-probe", type: "probeSummary" });
+    for (let i = 0; i < entries.length; i += 50) {
+      await realFetch("/api/log/" + encodeURIComponent(ns), { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entries: entries.slice(i, i + 50) }) });
+    }
+    return entries.length;
+  }
+
+  window.__probe = { ev, faults, report, page, save };
   console.log("[start-probe] installed");
 })();

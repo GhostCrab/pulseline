@@ -147,6 +147,36 @@ def append_log(lp, entries):
                 f.write(line[:LOG_ENTRY_MAX_CHARS] + "\n")
 
 
+def git_rev(root=None):
+    """Short commit id of the checkout the pages are served from, or None.
+
+    Read straight from .git rather than by running git: the service must not depend on
+    git being installed or on PATH, and this is asked on every page load. Pages are
+    served from disk without a restart, so it is read on each call, not at startup.
+    7 characters is git's own default short form."""
+    gitdir = os.path.join(root or ROOT, ".git")
+    try:
+        with open(os.path.join(gitdir, "HEAD"), encoding="utf-8") as f:
+            head = f.read().strip()
+        if head.startswith("ref: "):
+            ref, sha = head[5:].strip(), None
+            try:
+                with open(os.path.join(gitdir, *ref.split("/")), encoding="utf-8") as f:
+                    sha = f.read().strip()
+            except FileNotFoundError:
+                # `git gc` moves loose refs into packed-refs: "<sha> <refname>" per line.
+                with open(os.path.join(gitdir, "packed-refs"), encoding="utf-8") as f:
+                    for line in f:
+                        parts = line.split()
+                        if len(parts) == 2 and parts[1] == ref:
+                            sha = parts[0]
+        else:
+            sha = head
+    except OSError:
+        return None
+    return sha[:7] if sha and re.fullmatch(r"[0-9a-f]{7,64}", sha) else None
+
+
 def read_json(path, default):
     try:
         with open(path, "rb") as f:
@@ -203,6 +233,9 @@ class Handler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        if self.path.split("?")[0] == "/api/version":
+            self._json({"rev": git_rev()})
+            return
 
         ap = analysis_path(self.path)
         if ap:

@@ -3,7 +3,7 @@
 #
 #   bash scripts/pull-log.sh            # newest log for any namespace
 #   bash scripts/pull-log.sh u_alice    # a specific namespace
-#   PI_HOST=ps-cf bash scripts/pull-log.sh
+#   PI_HOST=<ssh alias> bash scripts/pull-log.sh     # default: p5s
 #
 # The log is written by whichever server served the page, so a workout run against
 # production leaves it on the Pi and local data/ stays empty. Getting the first one took
@@ -19,16 +19,34 @@
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
-PI_HOST="${PI_HOST:-ps}"
+PI_HOST="${PI_HOST:-p5s}"
 REMOTE_DIR="${REMOTE_DIR:-/opt/pulseline/data}"
 NS="${1:-}"
+
+# On Windows, prefer the system OpenSSH over the one bundled with Git Bash. The bundled
+# one failed to load a key the system one reads fine ("Load key ...: error in libcrypto",
+# then "Permission denied"), which looked like a wrong host and cost several round trips.
+SSH=ssh
+SCP=scp
+if [ -x /c/Windows/System32/OpenSSH/ssh.exe ] && [ -x /c/Windows/System32/OpenSSH/scp.exe ]; then
+  SSH=/c/Windows/System32/OpenSSH/ssh.exe
+  SCP=/c/Windows/System32/OpenSSH/scp.exe
+fi
 
 echo "host:   $PI_HOST   (override with PI_HOST=...)"
 echo "remote: $REMOTE_DIR"
 
 # Read-only: list what is there, newest first. Fails cleanly if the host is unreachable
-# rather than hanging on a password prompt.
-listing=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$PI_HOST" \
+# rather than hanging on a password prompt. An unreachable host and an empty directory
+# are told apart: reporting "no log found" for a failed login sends you looking for a
+# workout that never ran.
+if ! "$SSH" -o BatchMode=yes -o ConnectTimeout=10 "$PI_HOST" true; then
+  echo
+  echo "Could not log in to '$PI_HOST' (see the ssh error above)."
+  echo "Check with:  ssh $PI_HOST true      or set PI_HOST=<an alias that works>"
+  exit 1
+fi
+listing=$("$SSH" -o BatchMode=yes -o ConnectTimeout=10 "$PI_HOST" \
   "ls -t '$REMOTE_DIR'/clientlog-*.jsonl 2>/dev/null" || true)
 
 if [ -z "$listing" ]; then
@@ -53,7 +71,7 @@ fi
 
 mkdir -p data
 echo "pulling: $remote"
-scp -q "$PI_HOST:$remote" data/
+"$SCP" -q "$PI_HOST:$remote" data/
 local="data/$(basename "$remote")"
 echo "wrote:   $local  ($(wc -c < "$local") bytes)"
 

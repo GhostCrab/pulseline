@@ -403,6 +403,60 @@ class TestCachePolicy(ServerCase):
         self.assertEqual(headers["Cache-Control"], "no-cache, must-revalidate")
 
 
+class TestVersionApi(ServerCase):
+    """GET /api/version: which commit the pages are served from, read from .git without
+    running git. workout.html stamps it on every `begin` log entry."""
+    SHA = "65ca33b0123456789abcdef0123456789abcdef0"
+
+    def git(self, *parts):
+        p = os.path.join(self.tmp, ".git", *parts)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        return p
+
+    def write(self, text, *parts):
+        with open(self.git(*parts), "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def rev(self):
+        status, headers, text = request(self.base + "/api/version")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get("Cache-Control"), "no-store")
+        return json.loads(text)["rev"]
+
+    def test_no_checkout_answers_null_rather_than_failing(self):
+        # A copy of the files with no .git is a legitimate way to run this.
+        self.assertIsNone(self.rev())
+
+    def test_a_branch_checkout_is_resolved_through_its_ref(self):
+        self.write("ref: refs/heads/master\n", "HEAD")
+        self.write(self.SHA + "\n", "refs", "heads", "master")
+        self.assertEqual(self.rev(), "65ca33b")
+
+    def test_a_packed_ref_is_found_after_gc(self):
+        self.write("ref: refs/heads/master\n", "HEAD")
+        self.write("# pack-refs with: peeled fully-peeled sorted\n"
+                   "1111111111111111111111111111111111111111 refs/heads/other\n"
+                   + self.SHA + " refs/heads/master\n", "packed-refs")
+        self.assertEqual(self.rev(), "65ca33b")
+
+    def test_a_detached_head_is_the_commit_itself(self):
+        self.write(self.SHA + "\n", "HEAD")
+        self.assertEqual(self.rev(), "65ca33b")
+
+    def test_it_is_read_per_request_so_a_deploy_needs_no_restart(self):
+        self.write("ref: refs/heads/master\n", "HEAD")
+        self.write(self.SHA + "\n", "refs", "heads", "master")
+        self.assertEqual(self.rev(), "65ca33b")
+        self.write("5916d14" + "0" * 33 + "\n", "refs", "heads", "master")
+        self.assertEqual(self.rev(), "5916d14")
+
+    def test_anything_that_is_not_a_commit_id_answers_null(self):
+        for junk in ("", "ref: refs/heads/missing\n", "not a sha\n", "<html>\n"):
+            with self.subTest(head=junk):
+                self.write(junk, "HEAD")
+                self.assertIsNone(self.rev())
+
+
 class TestAtomicWrite(unittest.TestCase):
     """write_json_atomic is called directly: it has no HTTP surface of its own."""
 
