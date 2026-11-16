@@ -101,7 +101,21 @@ test("the first playing state after play is sent starts live sync", () => {
   onSdkState(sdkState("spotify:track:first", 0, false, true));
   assert.equal(P.slew, -1.7, "a small gap is absorbed, not jumped");
   assert.deepEqual(toasts, [], "a normal start must not warn about anything");
-  assert.deepEqual(logged.map(l => l.data.diagnosis), ["inOrder"]);
+  assert.deepEqual(logged.filter(l => l.type === "syncDiag").map(l => l.data.diagnosis), ["inOrder"]);
+});
+
+test("the first playing state is logged as `heard`, once, with how long it took", () => {
+  /* data/clientlog 2026-11-15: two STARTs that Spotify accepted and nobody could hear.
+   * play answers 204 over silence, so the SDK's first playing state is the only evidence
+   * of audio, and scripts/clientlog.py reads a playAck with no `heard` as a silent start. */
+  const { onSdkState, W, logged } = freshPage();
+  W.playSent = true;
+  W.playSentAt = -350;                         // performance.now() is pinned at 0 here
+  onSdkState(sdkState("spotify:track:first", 55606, true, false));   // stale: not audio
+  assert.deepEqual(logged.filter(l => l.type === "heard"), []);
+  onSdkState(sdkState("spotify:track:first", 0, false, true));
+  onSdkState(sdkState("spotify:track:first", 900, false, false));
+  assert.deepEqual(logged.filter(l => l.type === "heard").map(l => l.data), [{ ms: 350 }]);
 });
 
 test("a slow start snaps the clock back to the audio without crying shuffle", () => {
@@ -178,6 +192,60 @@ test("returning to the app after playback stopped elsewhere still pauses the wor
   assert.deepEqual(connect.pauses, [true]);
 });
 
+/* ---- refreshIfStale: a page that has been in the background is replaced ---- */
+
+function freshStale({ target = "sdk", hiddenAt = 1, sdkPlaying = false } = {}) {
+  const logged = [], calls = [];
+  const factory = new Function(
+    "target", "hiddenAt", "sdkPlaying", "lastHiddenMs", "clog", "clogFlush", "location",
+    "let reloading=false;\n" + extractFunction("refreshIfStale") + "\nreturn refreshIfStale;");
+  const refresh = factory(target, hiddenAt, sdkPlaying, 82800000,
+    (type, data) => { logged.push({ type, data }); calls.push("log"); },
+    () => calls.push("flush"), { reload: () => calls.push("reload") });
+  return { refresh, logged, calls };
+}
+
+test("REGRESSION: a page that has been in the background reloads before the next workout", () => {
+  /* data/clientlog 2026-11-15: the installed iOS app was reopened, not restarted, on the
+   * page that had finished the previous day's workout. Its player said `ready`, Spotify
+   * accepted play twice, and nothing was heard until the app was force-closed. */
+  const p = freshStale();
+  assert.equal(p.refresh("done"), true);
+  assert.deepEqual(p.calls, ["log", "flush", "reload"], "the reason must be on its way before the page goes");
+  assert.deepEqual(p.logged, [{ type: "staleReload", data: { why: "done", hiddenMs: 82800000 } }]);
+  // Seen in desktop Chrome: the visibility event fired again while the page was leaving.
+  assert.equal(p.refresh("visible"), true);
+  assert.equal(p.calls.filter(c => c === "reload").length, 1, "reloaded twice");
+  assert.equal(p.logged.length, 1, "logged twice");
+});
+
+test("a page that was never hidden is left alone", () => {
+  const p = freshStale({ hiddenAt: 0 });
+  assert.equal(p.refresh("done"), false);
+  assert.deepEqual(p.calls, []);
+});
+
+test("a page that is still playing the cooldown music is not reloaded under it", () => {
+  const p = freshStale({ sdkPlaying: true });
+  assert.equal(p.refresh("done"), false);
+  assert.deepEqual(p.calls, []);
+});
+
+test("Spotify-app mode has no in-page player to go stale", () => {
+  const p = freshStale({ target: "connect" });
+  assert.equal(p.refresh("visible"), false);
+  assert.deepEqual(p.calls, []);
+});
+
+test("the reload is wired only to the splash and to leaving the completion card", () => {
+  // Structural: a reload anywhere else would throw away a run that is armed or running.
+  const code = require("./_page.js").stripComments(src);
+  const uses = code.match(/refreshIfStale\("[a-z]+"\)/g) || [];
+  assert.deepEqual(uses.sort(), ['refreshIfStale("done")', 'refreshIfStale("visible")']);
+  assert.match(code, /if\(!W\)refreshIfStale\("visible"\)/);
+  assert.match(code, /backToSplash\(\);refreshIfStale\("done"\)/);
+});
+
 /* ---- beginPlayback: what is sent, in what order, and on behalf of which run ---- */
 
 const PLAY_URI_MAX = Number(src.match(/const PLAY_URI_MAX=(\d+);/)[1]);
@@ -203,7 +271,11 @@ function freshBegin({ respond = () => null, sdkReady = Promise.resolve("dev1") }
   const factory = new Function(
     "target", "hasStreamScope", "sdk", "initSdk", "api", "clog", "toast", "$",
     "navigator", "setTimeout", "BUILD", "performance",
-    "let W=null,sdkErrTimes=[],sdkId='dev1';\nconst PLAY_URI_MAX=" + PLAY_URI_MAX + ";\n"
+    "let W=null,sdkErrTimes=[],sdkId='dev1';\n"
+    + "let sdkReadies=2,sdkReadyAt=Date.now()-9000,lastHiddenMs=82800000;\n"
+    + "const LOADED_AT=Date.now()-86400000;\n"
+    + src.match(/const devTail=.*;/)[0] + "\n"
+    + "const PLAY_URI_MAX=" + PLAY_URI_MAX + ";\n"
     + extractFunction("playBody") + "\n" + extractFunction("forceLinearPlayback") + "\n"
     + extractFunction("beginPlayback")
     + "\nreturn {begin:beginPlayback,setW:w=>{W=w}};");
@@ -324,6 +396,22 @@ test("every start ends in exactly one logged outcome, stamped with the build", a
   ready.resolve("dev1");
   await old;
   assert.deepEqual(outcome(gone), ["beginAbandoned"]);
+});
+
+test("a start records how old the page and its player were, and which device it addressed", async () => {
+  /* The harness above sets up the 2026-11-15 suspect: a page loaded a day ago, hidden for
+   * 23 hours, whose player announced `ready` a second time 9s before START. None of that
+   * was in the log that morning, so a resumed page could not be told from a fresh one. */
+  const p = freshBegin({ sdkReady: Promise.resolve("0123456789abcdef") });
+  p.setW(p.newRun());
+  await p.begin();
+  const begin = p.logged.find(l => l.type === "begin").data;
+  assert.equal(begin.readies, 2);
+  assert.equal(begin.hiddenMs, 82800000);
+  assert.ok(begin.readyAgoMs >= 9000 && begin.readyAgoMs < 60000, "readyAgoMs: " + begin.readyAgoMs);
+  assert.ok(begin.loadAgoMs >= 86400000, "loadAgoMs: " + begin.loadAgoMs);
+  // The tail only: enough to compare two entries, not the whole identifier.
+  assert.equal(p.logged.find(l => l.type === "playStart").data.dev, "abcdef");
 });
 
 test("a context start keeps the full order: transfer, shuffle, repeat, verify, play", async () => {

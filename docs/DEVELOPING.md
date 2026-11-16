@@ -182,6 +182,15 @@ together** whenever `ANALYSIS_VERSION` changes:
 - `reviveSession()` runs on `visibilitychange` / `focus` / `online`: re-acquires the wake lock,
   resumes audio, revalidates the token, reconnects the SDK if `!sdkId`, and re-syncs against
   `/me/player`.
+- **A page that has been in the background is reloaded before the next workout**
+  (`refreshIfStale()`). The installed iOS app resumes yesterday's page when reopened, and
+  that page's player says `ready` and then plays nothing: Spotify accepts `play`, no track
+  list reaches the player, and a force-close cures it (`data/clientlog`, 2026-11-13 and
+  2026-11-15). The reload happens only on the splash or on leaving the completion card,
+  never over a run that is armed or running and never while the page itself is playing
+  (the cooldown music). It logs `staleReload`. Not covered: a run left armed or paused
+  across a long suspend and then started or resumed. That a reload restores a working
+  player on iOS is assumed from the force-close, not yet seen on a device.
 - Token refresh is **single-flight** (`refreshToken()` / `ensureToken(force)`, `SKEW_MS = 120000`)
   in `index.html`, `workout.html` and `calendar.html`, so concurrent callers can't race on Spotify's
   rotating refresh token. (`workout.html` only gained it in November 2026; before that `ensureToken(true)`
@@ -307,6 +316,17 @@ What the page puts there, so the reader has something to read:
 - **Every start ends in exactly one of `playAck` (with its `ms`), `beginFail` or
   `beginAbandoned`.** None of the three after a `begin` means the request was still in
   flight when the log stops.
+- **A start that produced audio logs `heard`** (with its `ms` from play being sent): the
+  SDK's first playing state for the run. `playAck` with no `heard` is a silent start, and
+  the reader reports it as `start-not-heard`. Added after 2026-11-15, when two starts were
+  accepted by Spotify and played nothing until the app was force-closed.
+- **What the page and its player had been through**: one `load` entry per page load
+  (`restored` for a back/forward-cache return), `vis` on every hide and return with
+  `hiddenMs`, the device id's last six characters on `ready`, `not_ready` and `playStart`
+  (`dev`), and on every `begin` the fields `readies` (how many times this page's player
+  has announced `ready`), `readyAgoMs`, `hiddenMs` and `loadAgoMs`. These exist to tell a
+  START on a page left open since yesterday from a START on a fresh one. They are
+  diagnostics; nothing in the page decides anything from them.
 - **Every handoff logs one `handoff` entry**, success included: `ok`, `mode`
   (`playlist`, `track` or `transfer`), `shuffle`, `shuffleOk`, `ms`.
 - **A batch that could not be delivered is put back** and retried, on a network error or a

@@ -373,6 +373,29 @@ def findings(records, bad=()):
                 "abandoned in this log: it was still in flight when the entries stop.",
                 evidence=[{"t": _when(first), "rev": first.get("rev")}]))
 
+    # --- a START that Spotify accepted and the in-app player never played ---------------
+    # play answers 204 over silence (quirk 9); the page logs `heard` on the first playing
+    # state the SDK reports for the run. playAck with no `heard` is the 2026-11-15
+    # failure: two starts accepted, nothing audible, fixed by force-closing the app. Only
+    # judged for builds that stamp `readies` on begin, which are the ones that log `heard`.
+    for run in split_runs(records):
+        first = run[0]
+        if first.get("type") != "begin" or "readies" not in first or first.get("target") != "sdk":
+            continue
+        types = [r.get("type") for r in run]
+        if "playAck" in types and "heard" not in types:
+            out.append(Finding(
+                HIGH, "start-not-heard",
+                "Spotify accepted play but the in-app player never reported anything "
+                "playing: a silent start. `readies` above 1 or a `hiddenMs` means the "
+                "player had been through a suspend; `loadAgoMs` says how old the page was.",
+                rule="spotify-api.md quirk 9",
+                evidence=[{"t": _when(first), "rev": first.get("rev"),
+                           "readies": first.get("readies"),
+                           "readyAgoMs": first.get("readyAgoMs"),
+                           "hiddenMs": first.get("hiddenMs"),
+                           "loadAgoMs": first.get("loadAgoMs")}]))
+
     # --- a run that began but never saw the player become ready --------------------
     begins = _of_type(records, "begin")
     sdk_begins = [r for r in begins if r.get("target") == "sdk"]

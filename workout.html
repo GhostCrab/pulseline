@@ -376,8 +376,14 @@ addEventListener("pagehide",clogFlush);
    log says what code the device was actually running. null until it answers, and for
    good against a server that predates /api/version. */
 let BUILD=null;
+/* One `load` entry per page load, and `restored` when the browser brings the page back
+   from its back/forward cache. Without them a START on a page left open since yesterday
+   reads exactly like a START on a fresh one - the question the log of 2026-11-15 could
+   not answer (two silent starts, then a force-close and a start that worked). */
+const LOADED_AT=Date.now();
 fetch("/api/version",{cache:"no-store"}).then(r=>r.ok?r.json():null)
-  .then(j=>{BUILD=(j&&j.rev)||null}).catch(()=>{});
+  .then(j=>{BUILD=(j&&j.rev)||null}).catch(()=>{}).then(()=>clog("load",{rev:BUILD}));
+addEventListener("pageshow",e=>{if(e.persisted)clog("restored",{})});
 
 /* ---------- containment for the run loop ----------
    Under "use strict", moving or deleting a block orphans an identifier it defined and
@@ -557,6 +563,49 @@ $("#wsList").addEventListener("click",e=>{
 
 /* ---------- Spotify Web Playback SDK (browser as the player) ---------- */
 let sdk=null,sdkId=null,sdkReady=null;
+/* Diagnostics only (nothing below decides anything from them): how many times this
+   page's player has announced `ready`, when it last did, and how long the page was last
+   hidden. Stamped on `begin`, so a start on a player that has been through a suspend
+   can be told from a start on a new one. Wall-clock, because a suspended page's
+   performance.now() is not guaranteed to keep counting. */
+let sdkReadies=0,sdkReadyAt=0,hiddenAt=0,lastHiddenMs=null;
+/* The last characters of a device id: enough to see whether two entries name the same
+   device, without writing the whole identifier into the log. */
+const devTail=id=>id?String(id).slice(-6):null;
+document.addEventListener("visibilitychange",()=>{
+  if(document.visibilityState==="hidden"){
+    hiddenAt=Date.now();clog("vis",{state:"hidden"});
+    clogFlush();                      // a page going away may never run its timer
+    return;
+  }
+  if(hiddenAt)lastHiddenMs=Date.now()-hiddenAt;
+  clog("vis",{state:"visible",hiddenMs:lastHiddenMs,dev:devTail(sdkId)});
+  if(!W)refreshIfStale("visible");    // on the splash: nothing on screen to lose
+});
+/* A page that has been in the background gets a NEW page before the next workout.
+   The installed iOS app is not restarted when it is reopened: it resumes yesterday's
+   page, whose player announces `ready` again and then plays nothing - Spotify accepts
+   play and no track list ever reaches the player (data/clientlog 2026-11-15, two silent
+   STARTs; 2026-11-13 has the same shape). Force-closing the app cured it every time, and
+   a reload is the nearest thing a page can do to that for itself.
+   Only where there is nothing to lose: on the splash, or leaving the completion card.
+   Never over a run that is armed or in progress, and never while this page is the one
+   making sound (the cooldown music after a finish). There is no "hidden for how long"
+   test because nothing measured says how long is too long; any time in the background
+   counts, and the cost of a needless reload on the splash is one page load.
+   NOT verified on iOS: that a reload gives a working player there, as a force-close
+   does, is the assumption. `staleReload` in the log followed by a `load` and a start
+   with no `heard` would disprove it. */
+let sdkPlaying=false,reloading=false;
+function refreshIfStale(why){
+  if(target!=="sdk"||!hiddenAt||sdkPlaying)return false;
+  if(reloading)return true;           // the browser can fire the event again on the way out
+  reloading=true;
+  clog("staleReload",{why,hiddenMs:lastHiddenMs});
+  clogFlush();
+  location.reload();
+  return true;
+}
 const hasStreamScope=()=>((LSD.get("tok",{})||{}).scope||"").includes("streaming");
 let target=LSD.get("target","sdk");     // "sdk" = play in this app, "connect" = external device
 function setTarget(t){
@@ -593,9 +642,12 @@ function initSdk(){
   if(sdkReady||!window.Spotify||!hasStreamScope())return sdkReady;
   sdkReady=new Promise(resolve=>{
     sdk=new Spotify.Player({name:"Pulseline",getOAuthToken:cb=>ensureToken().then(cb),volume:1});
-    sdk.addListener("ready",({device_id})=>{sdkId=device_id;resolve(device_id)});
+    sdk.addListener("ready",({device_id})=>{sdkId=device_id;sdkReadies++;sdkReadyAt=Date.now();resolve(device_id)});
+    /* `ready` and `not_ready` carry the device id; its tail and the running count go in
+       the log so a player that re-announces itself after a suspend is visible as one. */
     ["ready","not_ready","initialization_error","authentication_error","account_error",
-     "playback_error","autoplay_failed"].forEach(ev=>sdk.addListener(ev,e=>clog("sdk",{ev,msg:(e&&e.message)||""})));
+     "playback_error","autoplay_failed"].forEach(ev=>sdk.addListener(ev,e=>clog("sdk",{ev,msg:(e&&e.message)||"",
+       ...(e&&e.device_id?{dev:devTail(e.device_id),n:sdkReadies}:{})})));
     sdk.addListener("not_ready",()=>{sdkId=null;netBad()});
     sdk.addListener("ready",()=>{netOK()});
     sdk.addListener("initialization_error",({message})=>{resolve(null);sdkFail("In-app player couldn't start ("+message+")")});
@@ -616,6 +668,9 @@ function initSdk(){
     });
     /* real-time sync: fires on every play/pause/seek/track change — no polling */
     sdk.addListener("player_state_changed",onSdkState);
+    /* Whether THIS page is making sound, run or no run: refreshIfStale must not reload
+       over the cooldown music that keeps playing after a finish. */
+    sdk.addListener("player_state_changed",st=>{sdkPlaying=!!(st&&!st.paused)});
     sdk.connect();
   });
   return sdkReady;
@@ -637,6 +692,9 @@ function onSdkState(st){
   if(!W.heard){
     if(!W.playSent||st.paused)return;
     W.heard=true;
+    /* The only evidence that audio started: play answers 204 over silence (quirk 9).
+       A playAck with no `heard` after it is a start nobody could hear. */
+    clog("heard",{ms:Math.round(performance.now()-W.playSentAt)});
   }
   if(st.paused&&P.playing&&!st.loading){setPaused(true);return}
   if(!st.paused&&!P.playing){setPaused(false);return}   // resumed from headphones/lock screen
@@ -1033,7 +1091,7 @@ $("#handoffList").addEventListener("click",e=>{
   const b=e.target.closest(".dv[data-id]");
   if(b)doHandoff(b.dataset.id,b.dataset.nm);
 });
-$("#doneBtn").onclick=backToSplash;
+$("#doneBtn").onclick=()=>{backToSplash();refreshIfStale("done")};
 $("#exitBtn").onclick=()=>{
   if(!W)return;
   const sx=at(W.secs,P.t);
@@ -1114,7 +1172,9 @@ async function beginPlayback(){          // called from the START tap (a user ge
      run) and the oldest one's failure marking the NEWEST run simulated (data/clientlog,
      2026-11-13). So every await below is followed by a check that W is still this run. */
   const run=W;
-  clog("begin",{target,streamScope:hasStreamScope(),rev:BUILD,ua:navigator.userAgent});
+  clog("begin",{target,streamScope:hasStreamScope(),rev:BUILD,ua:navigator.userAgent,
+    readies:sdkReadies,readyAgoMs:sdkReadyAt?Date.now()-sdkReadyAt:null,
+    hiddenMs:lastHiddenMs,loadAgoMs:Date.now()-LOADED_AT});
   try{
     let q="",devId=null;
     if(target==="sdk"){
@@ -1136,7 +1196,7 @@ async function beginPlayback(){          // called from the START tap (a user ge
        playlist order. */
     const body=playBody(run.ws.tracks,run.key);
     clog("playStart",{mode:body.uris?"uris":"context",
-      tracks:(run.ws.tracks||[]).length});
+      tracks:(run.ws.tracks||[]).length,dev:devTail(devId)});
     run.playedByUris=!!body.uris;
     /* Only a CONTEXT start waits for the forced-linear sequence, because only there must
        shuffle be off before play (quirk 4). A uris start sends play first: measured on
@@ -1154,6 +1214,7 @@ async function beginPlayback(){          // called from the START tap (a user ge
     }
     run.playSent=true;                  // from here the SDK's state is about OUR playback (onSdkState)
     const playSentAt=performance.now();
+    run.playSentAt=playSentAt;          // onSdkState logs how long the first playing state took
     await api("/me/player/play"+q,{method:"PUT",body});
     /* Success is logged too, with how long it took: without it a START followed by
        silence in the log cannot be told from a request that is still hanging. */

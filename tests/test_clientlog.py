@@ -751,6 +751,53 @@ class TestStartResolution(unittest.TestCase):
         self.assertIn("start-unresolved", codes(records))
 
 
+class TestSilentStart(unittest.TestCase):
+    """2026-11-15: two STARTs that Spotify accepted and nobody could hear, then a
+    force-close and one that worked. play answers 204 over silence, so `heard` - the SDK's
+    first playing state - is the only evidence that audio started."""
+
+    def begin(self, t=1000, **extra):
+        data = dict(target="sdk", streamScope=True, rev="abc1234", readies=2,
+                    readyAgoMs=9000, hiddenMs=82800000, loadAgoMs=86400000)
+        data.update(extra)
+        return entry("begin", t=t, **data)
+
+    def test_an_accepted_start_that_was_never_heard_is_high(self):
+        records = [self.begin(), entry("playStart", t=1001), entry("playAck", t=1300, ms=299)]
+        found = by_code(records, "start-not-heard")
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].severity, clientlog.HIGH)
+        # What tells a resumed page from a fresh one travels with the finding.
+        self.assertEqual(found[0].evidence[0]["readies"], 2)
+        self.assertEqual(found[0].evidence[0]["hiddenMs"], 82800000)
+        self.assertEqual(found[0].evidence[0]["loadAgoMs"], 86400000)
+
+    def test_a_start_that_was_heard_is_not_flagged(self):
+        records = [self.begin(), entry("playAck", t=1300, ms=299), entry("heard", t=1400, ms=383)]
+        self.assertNotIn("start-not-heard", codes(records))
+
+    def test_runs_are_judged_separately(self):
+        # This morning's shape: silent, silent, then one that played.
+        records = [self.begin(t=1000), entry("playAck", t=1300, ms=299),
+                   self.begin(t=28000), entry("playAck", t=28300, ms=299),
+                   self.begin(t=43000, readies=1), entry("playAck", t=43300, ms=299),
+                   entry("heard", t=43400, ms=383)]
+        self.assertEqual(len(by_code(records, "start-not-heard")), 2)
+
+    def test_a_start_that_failed_outright_is_not_called_silent(self):
+        records = [self.begin(), entry("beginFail", t=1300, msg="Spotify 502")]
+        self.assertNotIn("start-not-heard", codes(records))
+
+    def test_a_build_that_predates_heard_is_not_judged(self):
+        old = [entry("begin", t=1000, target="sdk", streamScope=True, rev="abc1234"),
+               entry("playAck", t=1300, ms=299)]
+        self.assertNotIn("start-not-heard", codes(old))
+
+    def test_spotify_app_mode_has_no_sdk_to_hear_from(self):
+        records = [self.begin(target="connect"), entry("playAck", t=1300, ms=299)]
+        self.assertNotIn("start-not-heard", codes(records))
+
+
 class TestTimelineAndExpect(unittest.TestCase):
     def test_entries_come_out_in_time_order_with_their_fields(self):
         lines = clientlog.timeline([entry("playAck", t=2000, ms=210),
