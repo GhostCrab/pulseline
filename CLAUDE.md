@@ -23,7 +23,7 @@ A commit that changes the playback path in `workout.html` is refused unless its 
 
 ## Environments
 
-Develop and test on the build/test machine against the local server. Production is `/opt/pulseline` on the Pi (`pulseline.pielow.io`); deploy there only when asked. See `docs/DEVELOPING.md` *Environments*.
+Develop and test on the build/test machine against the local server. Production is `/opt/pulseline` on the Pi (`pulseline.pielow.io`); deploy there only when asked. The Pi pulls from GitHub, so a commit is deployable only once pushed: when the user will deploy, push, or say plainly that it is not pushed. For ad-hoc SSH to the Pi, use PowerShell; Git Bash's ssh cannot read the key. See `docs/DEVELOPING.md` *Environments*.
 
 ## Where things are
 

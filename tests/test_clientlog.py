@@ -473,6 +473,7 @@ class TestDegradeAndFailure(unittest.TestCase):
         self.assertIn("/me/player/shuffle", found[0].message)
         self.assertIn("RupOGcf", found[0].message)
         self.assertIn("Treated as success", found[0].message)
+        self.assertNotIn("times)", found[0].message, "a single body is not given a count")
 
     def test_an_in_app_run_with_no_ready_event_is_flagged(self):
         """The 6s device-id race in beginPlayback was lost."""
@@ -749,6 +750,82 @@ class TestStartResolution(unittest.TestCase):
         records = [entry("sdk", t=900, ev="ready"),
                    entry("begin", t=1000, target="sdk", streamScope=True, rev=None)]
         self.assertIn("start-unresolved", codes(records))
+
+
+class TestRetroTooling(unittest.TestCase):
+    """Added by the 2026-11-23 retro: a fix sat undeployed for eight days, and reading a
+    week of the log took a throwaway printer and wading through quirk-10 noise."""
+
+    DAY = 24 * 60 * 60 * 1000
+
+    def test_repeated_success_bodies_collapse_to_one_finding_per_endpoint(self):
+        records = [entry("apiBody", t=1000 + i, method="PUT", path="/me/player/shuffle",
+                         status=200, head="tok%d" % i) for i in range(5)]
+        records += [entry("apiBody", t=2000 + i, method="PUT", path="/me/player/repeat",
+                          status=200, head="rep%d" % i) for i in range(2)]
+        found = by_code(records, "unparseable-success-body")
+        self.assertEqual(len(found), 2)
+        self.assertIn("(5 times)", found[0].message)
+        self.assertIn("(2 times)", found[1].message)
+        self.assertEqual(len(found[0].evidence), 4, "evidence is capped, not the count")
+
+    def test_since_parses_minutes_hours_and_days(self):
+        self.assertEqual(clientlog.parse_since("90m"), 90 * 60 * 1000)
+        self.assertEqual(clientlog.parse_since("12h"), 12 * 60 * 60 * 1000)
+        self.assertEqual(clientlog.parse_since("5d"), 5 * self.DAY)
+        for bad in ("", "5", "d", "5w", "-5d", "five d"):
+            self.assertIsNone(clientlog.parse_since(bad), bad)
+
+    def test_since_reports_every_session_in_the_window_and_nothing_older(self):
+        import contextlib
+        import io
+        import tempfile
+        newest = 100 * self.DAY
+        old = entry("begin", t=newest - 9 * self.DAY, target="sdk", streamScope=False)
+        recent = [entry("begin", t=newest - 3 * self.DAY, target="sdk", streamScope=True,
+                        rev="abc1234", readies=1),
+                  entry("playAck", t=newest - 3 * self.DAY + 300, ms=300),
+                  entry("sdk", t=newest, ev="ready")]
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "clientlog-u_alice.jsonl")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(jsonl(old, *recent))
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                status = clientlog.report(path, as_json=True,
+                                          since_ms=clientlog.parse_since("5d"))
+        got = json.loads(out.getvalue())
+        self.assertEqual(got["summary"]["entries"], 3, "the 9-day-old entry was included")
+        # The silent start 3 days ago is in the window; the old no-scope run is not.
+        found = {f["code"] for f in got["findings"]}
+        self.assertIn("start-not-heard", found)
+        self.assertNotIn("no-stream-scope", found)
+        self.assertEqual(status, 1)
+
+    def test_a_device_running_an_older_commit_than_head_is_flagged(self):
+        records = [entry("begin", t=1000, target="sdk", rev="4d31a8d"),
+                   entry("begin", t=2000, target="sdk", rev="4d31a8d")]
+        found = clientlog.behind_head(records, head="ebe916a",
+                                      newer=["ebe916a Reload a page that has been..."])
+        self.assertEqual([f.code for f in found], ["device-behind-head"])
+        self.assertEqual(found[0].severity, clientlog.WARN)
+        self.assertIn("4d31a8d", found[0].message)
+        self.assertIn("pushed", found[0].message)
+
+    def test_the_latest_begin_decides_which_commit_the_device_ran(self):
+        records = [entry("begin", t=1000, rev="4d31a8d"), entry("begin", t=2000, rev="ebe916a")]
+        self.assertEqual(clientlog.behind_head(records, head="ebe916a", newer=["x"]), [])
+
+    def test_no_finding_without_a_rev_or_when_nothing_is_newer(self):
+        self.assertEqual(clientlog.behind_head([entry("begin", rev=None)], head="ebe916a",
+                                               newer=["x"]), [])
+        # The device is ahead of this checkout, or on another branch: nothing to say.
+        self.assertEqual(clientlog.behind_head([entry("begin", rev="1111111")],
+                                               head="ebe916a", newer=[]), [])
+
+    def test_a_full_hash_on_either_side_still_matches(self):
+        self.assertEqual(clientlog.behind_head([entry("begin", rev="ebe916a")],
+                                               head="ebe916a1234", newer=["x"]), [])
 
 
 class TestSilentStart(unittest.TestCase):

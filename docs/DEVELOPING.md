@@ -41,6 +41,11 @@ cost is that an auth or storage fix must be applied to every page that has one â
 - **Production** is `/opt/pulseline` on a Debian Pi 5 (systemd unit `pulseline.service`), served
   through a Cloudflare tunnel at `pulseline.pielow.io`. Deploy by updating the checkout there and
   `sudo systemctl restart pulseline` (needed only for `server.py` changes; pages are served no-cache).
+  That checkout pulls from GitHub, so **an unpushed commit cannot be deployed**: a fix committed
+  on 2026-11-15 sat undeployed for eight days while the phone kept failing on the old code.
+  `bash scripts/pull-log.sh` prints the commit the Pi serves beside `HEAD` and `origin/master`
+  and warns when they differ, and `scripts/clientlog.py` reports `device-behind-head` when the
+  device's `begin` carries an older `rev` than `HEAD`.
 - **Checks** run anywhere: `python3 scripts/check.py`. Run `git config core.hooksPath .githooks`
   once per clone to run them on every commit, and `npm install` to enable the ESLint pass.
   CI runs the same script on every push.
@@ -253,7 +258,7 @@ can hold it.
 |---|---|---|
 | `tests/test_server_api.py` | `server.py`'s HTTP interface, over real HTTP on a scratch port | the storage-model invariants: shallow merge, the forced `history` drop, history idempotency and ts ordering, both legacy migrations, the summary projection and its mtime+size cache, `NS_RE` rejection, the 400-before-404 dispatch order, the client-log caps and rotation, `write_json_atomic`'s rolling backups, and `/api/version` reading the served commit from `.git` (loose ref, packed ref, detached, absent) |
 | `tests/analysis-core.test.js` | `analysis-core.js`'s pure surface, via a stub `window` | `foldToReference`, `loudnessCurve01`, the `METRICS` catalogue, `metricByKey`, `metricValue`, `metricBounds` â€” including the documented-vs-observed provenance the *no-invented-numbers rule* rests on |
-| `tests/test_clientlog.py` | `scripts/clientlog.py`, the client-diagnostics reader | the failure signatures it recognises in a real device's log, that a clean handoff and a resolved start report nothing above INFO, the `--timeline` view and `--expect`, and that it survives the truncated lines `server.py` is guaranteed to write |
+| `tests/test_clientlog.py` | `scripts/clientlog.py`, the client-diagnostics reader | the failure signatures it recognises in a real device's log, that a clean handoff and a resolved start report nothing above INFO, the `--timeline` view, `--expect` and `--since`, the quirk-10 collapse, `device-behind-head`, and that it survives the truncated lines `server.py` is guaranteed to write |
 | `tests/test_commit_msg.py` | `scripts/commit_msg.py`, the commit-msg guardrail | that a change inside a fragile function is detected and one elsewhere in the page is not, that every listed function still exists in the real page, that a bare `yes` is not evidence, that `no` with a reason passes, and that merges and reverts are exempt |
 | `tests/test_mutate.py` | `scripts/mutate.py`, the mutation tool | that the file is restored byte for byte whatever happens, that a silently failed restore is reported rather than leaving a break in the tree, that a non-unique pattern aborts, and that green is reported as the failure |
 | `tests/page-helpers.test.js` | `tests/_page.js`, the shared extraction helpers every page-level suite is built on | that a function is lifted whole (including past a default parameter and the `async` keyword), that comments are stripped before any structural assertion, and that a `finally` block is located by brace matching rather than by a word match |
@@ -299,7 +304,10 @@ machine output, or pass a path explicitly. **`--timeline` prints the entries the
 in time order**, with a marker wherever the log goes quiet: the findings say what a
 session meant, the timeline says what happened, and locating a fault needs the second.
 `--expect TYPE` (repeatable) fails the report when the session holds no entry of that
-type, so a pass that never reached a step cannot read as clean.
+type, so a pass that never reached a step cannot read as clean. `--since 5d` (or `12h`,
+`90m`) reports every session in that span, counted back from the log's newest entry: an
+intermittent fault needs a week of mornings, not the latest one. Repeated quirk-10
+success bodies are collapsed to one line per endpoint with a count.
 
 It recognises the missing-`streaming`-scope signature, paired `playback_error` events,
 each named SDK failure, a failed step of the forced-linear sequence, whatever Spotify
@@ -339,6 +347,11 @@ workout, then runs the reader with `--expect begin --expect playAck --expect han
 dirty or demo workspace runs silent by design and would pass vacuously, which is why the
 prerequisites come first. For a workout run against production, `bash scripts/pull-log.sh`
 copies the log down first.
+
+`bash scripts/hitl-workout.sh resumed` is the one pass the sequence above cannot reach: a
+page left in the background for hours (overnight), reopened without a force-close, then
+started. It pulls the log and expects `staleReload`, `load` and `heard`. It is not one of
+`commit_msg.py`'s required steps, because it takes a night.
 
 Automation cannot replace that pass. A browser-driving agent sees the DOM, the console
 and the network, and all three report success during the exact failure that matters.

@@ -15,8 +15,45 @@
 # it - docs/agents/spotify-api.md quirk 9 is why: the API reports success throughout a
 # silent failure, so only the SDK events and your own ears can tell.
 
+#   bash scripts/hitl-workout.sh resumed
+#
+# The resumed-app pass: the one step the sequence below cannot reach, because it needs a
+# page that has sat in the background for hours. Every other step runs on a fresh page,
+# which is why the silent start of 2026-11-15 (the installed iOS app resumed, not
+# restarted: play accepted, nothing heard, a force-close cured it) never showed up in a
+# pass. It is kept out of commit_msg.py's required steps because it takes overnight.
+
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
+
+find_python() {
+  PY=
+  for c in python3 python py; do
+    if "$c" -c "import sys" >/dev/null 2>&1; then PY="$c"; break; fi
+  done
+  [ -n "$PY" ] || { echo "no working Python found (tried python3, python, py)"; exit 1; }
+}
+
+if [ "${1:-}" = "resumed" ]; then
+  cat <<'EOF'
+THE RESUMED-APP PASS - against production, on the phone.
+
+  1. Finish a workout as usual (handoff or Done), then leave the app in the background.
+     Do NOT force-close it.
+  2. Hours later (the failures came after overnight), reopen the app from the home
+     screen. Do not force-close it first: the force-close is what hides the bug.
+  3. Pick a workout and tap START. Note whether you hear music.
+
+Expected in the log: `staleReload` (the page replaced itself), a new `load`, then a
+`begin` whose start ends in `heard`. A `start-not-heard` finding means a reload is not
+enough on iOS.
+EOF
+  printf '\n>>> Press Enter once the START has been tapped (and music heard or not).\n'
+  read -r -p "    [Enter] " _
+  bash scripts/pull-log.sh >/dev/null || { echo "pull-log.sh failed - run it on its own to see why"; exit 1; }
+  find_python
+  exec "$PY" scripts/clientlog.py --expect staleReload --expect load --expect heard
+fi
 
 cat <<'EOF'
 PREREQUISITES - the pass proves nothing if any of these is wrong.
@@ -52,11 +89,7 @@ printf '    or backgrounded, so the last client-log batch is flushed).\n'
 read -r -p "    [Enter] " _
 
 echo
-PY=
-for c in python3 python py; do
-  if "$c" -c "import sys" >/dev/null 2>&1; then PY="$c"; break; fi
-done
-[ -n "$PY" ] || { echo "no working Python found (tried python3, python, py)"; exit 1; }
+find_python
 
 # --expect: the sequence ends in a handoff, and a pass that never reached it must not read
 # as a clean pass. The handoff was broken for three days while passes that stopped at the

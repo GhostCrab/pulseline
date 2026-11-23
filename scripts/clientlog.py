@@ -303,13 +303,22 @@ def findings(records, bad=()):
                 evidence=[{"t": _when(rec), "tracks": rec.get("tracks")}]))
 
     # --- a success whose body would not parse ----------------------------------------
-    for rec in _of_type(records, "apiBody"):
+    # One finding per endpoint, with a count. Every start sends shuffle and repeat, so one
+    # finding per entry buried everything else: --all over a week printed about 50 of
+    # them (2026-11-23).
+    by_call = collections.OrderedDict()
+    for rec in sorted(_of_type(records, "apiBody"), key=_when):
+        key = (_label(rec.get("method")), _label(rec.get("path")), _label(rec.get("status")))
+        by_call.setdefault(key, []).append(rec)
+    for (method, path, status), recs in by_call.items():
         out.append(Finding(
             INFO, "unparseable-success-body",
-            "%s %s answered %s with a body that is not JSON: %r. Treated as success, "
+            "%s %s answered %s with a body that is not JSON%s: %r. Treated as success, "
             "because a 2xx is a success and the body is informational."
-            % (rec.get("method"), rec.get("path"), rec.get("status"), rec.get("head")),
-            evidence=[{"t": _when(rec), "head": rec.get("head")}]))
+            % (method, path, status,
+               "" if len(recs) == 1 else " (%d times)" % len(recs), recs[0].get("head")),
+            rule="spotify-api.md quirk 10",
+            evidence=[{"t": _when(r), "head": r.get("head")} for r in recs[:4]]))
 
     # --- the strict-mode orphaning class, caught rather than fatal -------------------
     # guardRun() in workout.html contains a throw inside the run loop so the countdown
@@ -566,12 +575,64 @@ def timeline(records):
     return lines
 
 
-def report(path, as_json=False, scope="last", show_timeline=False, expect=()):
+def parse_since(text):
+    """'5d', '12h', '90m' -> milliseconds. None for anything else."""
+    units = {"m": 60 * 1000, "h": 60 * 60 * 1000, "d": 24 * 60 * 60 * 1000}
+    text = (text or "").strip().lower()
+    if len(text) < 2 or text[-1] not in units or not text[:-1].isdigit():
+        return None
+    return int(text[:-1]) * units[text[-1]]
+
+
+def git_rev(*args):
+    """Output of a read-only git command in this checkout, or None (no git, no repo)."""
+    import subprocess
+    try:
+        r = subprocess.run(("git",) + args, cwd=ROOT, capture_output=True, text=True,
+                           timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def behind_head(records, head=None, newer=None):
+    """A WARN when the device ran an older commit than this checkout's HEAD.
+
+    The fix for the silent start was committed on 2026-11-15 and never pushed; the Pi
+    deploys from GitHub, so it kept serving the old commit, and every failing `begin` for
+    eight days said so in `rev` with nothing reading it. `head` and `newer` are injected
+    by tests; by default they come from git: HEAD, and the commits in rev..HEAD."""
+    revs = [r.get("rev") for r in sorted(_of_type(records, "begin"), key=_when) if r.get("rev")]
+    if not revs:
+        return []
+    rev = revs[-1]
+    head = head if head is not None else git_rev("rev-parse", "--short", "HEAD")
+    if not head or head.startswith(rev) or rev.startswith(head):
+        return []
+    if newer is None:
+        listed = git_rev("log", "--format=%h %s", "%s..HEAD" % rev)
+        newer = listed.splitlines() if listed else []
+    if not newer:
+        return []          # the device is ahead of this checkout, or on another branch
+    return [Finding(
+        WARN, "device-behind-head",
+        "The device ran %s, but this checkout's HEAD is %s: %d commit(s) were not on the "
+        "device. If they were meant to be deployed, check they are pushed - the Pi pulls "
+        "from GitHub." % (rev, head, len(newer)),
+        evidence=[{"commit": c} for c in newer[:4]])]
+
+
+def report(path, as_json=False, scope="last", show_timeline=False, expect=(), since_ms=None):
     with open(path, encoding="utf-8", errors="replace") as f:
         records, bad = parse_lines(f.read())
 
     sessions = split_sessions(records)
-    if scope == "last" and len(sessions) > 1:
+    if since_ms:
+        cutoff = max([_when(r) for r in records] or [0]) - since_ms
+        chosen = [r for r in records if _when(r) >= cutoff]
+        note = "the last %s of this log (%d session(s))" % (
+            _age(since_ms / 1000).replace(" ago", ""), len(split_sessions(chosen)))
+    elif scope == "last" and len(sessions) > 1:
         chosen, note = sessions[-1], ("latest of %d sessions in this log; "
                                       "--all to report every one" % len(sessions))
     else:
@@ -585,7 +646,7 @@ def report(path, as_json=False, scope="last", show_timeline=False, expect=()):
             print(line)
         return 0
 
-    found = findings(chosen, bad)
+    found = findings(chosen, bad) + behind_head(chosen)
     # A pass that was supposed to exercise something must have left its entry: without
     # this, "no findings" is also what a step that never ran looks like.
     seen = {_label(r.get("type")) for r in chosen}
@@ -645,7 +706,13 @@ def main():
     ap.add_argument("--expect", action="append", default=[], metavar="TYPE",
                     help="fail if the session has no entry of this type (repeatable), "
                          "e.g. --expect handoff after a device pass")
+    ap.add_argument("--since", metavar="SPAN",
+                    help="every session in the last SPAN of the log (5d, 12h, 90m), "
+                         "counted back from its newest entry")
     args = ap.parse_args()
+    since_ms = parse_since(args.since) if args.since else None
+    if args.since and not since_ms:
+        ap.error("--since takes a number and a unit: 5d, 12h or 90m")
 
     logs = find_logs()
 
@@ -675,7 +742,7 @@ def main():
         return 2
 
     return report(path, args.json, "all" if args.all else "last",
-                  show_timeline=args.timeline, expect=args.expect)
+                  show_timeline=args.timeline, expect=args.expect, since_ms=since_ms)
 
 
 if __name__ == "__main__":

@@ -46,6 +46,23 @@ if ! "$SSH" -o BatchMode=yes -o ConnectTimeout=10 "$PI_HOST" true; then
   echo "Check with:  ssh $PI_HOST true      or set PI_HOST=<an alias that works>"
   exit 1
 fi
+
+# What the Pi serves, beside this checkout and GitHub. The Pi deploys by pulling from
+# GitHub, so a commit that is not pushed cannot be deployed: on 2026-11-15 a fix was
+# committed, the deploy pulled the old commit, and it stayed undeployed for eight days.
+# Read-only on every side; a failure here prints "?" and never stops the pull.
+served=$("$SSH" -o BatchMode=yes -o ConnectTimeout=10 "$PI_HOST" \
+  "curl -s -m 5 http://127.0.0.1:8888/api/version" 2>/dev/null \
+  | sed -n 's/.*"rev": *"\([0-9a-f]*\)".*/\1/p' || true)
+head=$(git rev-parse --short HEAD 2>/dev/null || true)
+origin=$(git ls-remote origin refs/heads/master 2>/dev/null | cut -c1-7 || true)
+echo "served: ${served:-?}   HEAD: ${head:-?}   origin/master: ${origin:-?}"
+if [ -n "$head" ] && [ -n "$origin" ] && [ "$head" != "$origin" ]; then
+  echo "WARNING: HEAD is not on GitHub, so the Pi cannot have it. Push, then deploy."
+elif [ -n "$served" ] && [ -n "$origin" ] && [ "$served" != "$origin" ]; then
+  echo "WARNING: the Pi is not serving origin/master. Deploy (pull on the Pi)."
+fi
+
 listing=$("$SSH" -o BatchMode=yes -o ConnectTimeout=10 "$PI_HOST" \
   "ls -t '$REMOTE_DIR'/clientlog-*.jsonl 2>/dev/null" || true)
 
