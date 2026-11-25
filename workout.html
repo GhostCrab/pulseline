@@ -694,6 +694,26 @@ function initSdk(){
   });
   return sdkReady;
 }
+/* Re-register THIS player with Spotify and resolve with its device id, or null if it
+   does not say `ready` within 6s (the same bound beginPlayback gives the first ready).
+   The same player object is kept on purpose: its audio element was unlocked by the
+   START tap (activateElement), and a new player would need a gesture that has already
+   been spent. disconnect+connect announces `ready` again - measured on the real SDK in
+   desktop Chrome, 2026-11-15, with the same device id. */
+function reconnectSdk(){
+  return new Promise(resolve=>{
+    let t=null;
+    const onReady=({device_id})=>done(device_id||null);
+    const done=id=>{
+      clearTimeout(t);
+      try{sdk.removeListener("ready",onReady)}catch(e){}
+      resolve(id);
+    };
+    t=setTimeout(()=>done(null),6000);
+    sdk.addListener("ready",onReady);
+    Promise.resolve().then(()=>sdk.disconnect()).then(()=>sdk.connect()).catch(()=>done(null));
+  });
+}
 /* A named function, not an inline listener, so tests/workout-guard.test.js can replay a
    captured SDK trace through the real text. */
 function onSdkState(st){
@@ -1234,7 +1254,23 @@ async function beginPlayback(){          // called from the START tap (a user ge
     run.playSent=true;                  // from here the SDK's state is about OUR playback (onSdkState)
     const playSentAt=performance.now();
     run.playSentAt=playSentAt;          // onSdkState logs how long the first playing state took
-    await api("/me/player/play"+q,{method:"PUT",body});
+    try{await api("/me/player/play"+q,{method:"PUT",body})}
+    catch(e){
+      /* `404 Device not found`: Spotify has dropped this player while the page slept,
+         and the SDK never said so (no not_ready). Logged 2026-11-22 and 2026-11-24, both
+         after the page had been suspended for hours; both STARTs failed and the run went
+         SIMULATED. Re-register the player and send play once more. api() reports only
+         "Spotify <status>", and its body is shared across pages, so the message is what
+         is matched. In Spotify-app mode a 404 means no active device: not this case. */
+      if(target!=="sdk"||e.message!=="Spotify 404"||!sdk)throw e;
+      clog("deviceLost",{dev:devTail(devId)});
+      const id=await reconnectSdk();
+      if(W!==run){clog("beginAbandoned",{before:"retry"});return true}
+      if(!id)throw e;
+      clog("playRetry",{dev:devTail(id),same:id===devId});
+      devId=id;q="?device_id="+encodeURIComponent(id);
+      await api("/me/player/play"+q,{method:"PUT",body});
+    }
     /* Success is logged too, with how long it took: without it a START followed by
        silence in the log cannot be told from a request that is still hanging. */
     clog("playAck",{ms:Math.round(performance.now()-playSentAt)});

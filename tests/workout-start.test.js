@@ -310,15 +310,17 @@ const settle = () => new Promise(r => setImmediate(r));
  * scripted api(). `W` is a module-level `let` in the page and is REASSIGNED when a new
  * run starts, so it is declared inside the factory and swapped through setW - injecting
  * it as a parameter could not express "the run changed underneath a start in flight". */
-function freshBegin({ respond = () => null, sdkReady = Promise.resolve("dev1") } = {}) {
+function freshBegin({ respond = () => null, sdkReady = Promise.resolve("dev1"),
+                      reconnect = async () => "dev2" } = {}) {
   const calls = [], toasts = [], logged = [], badge = { textContent: "", className: "" };
+  const reconnects = [];
   const api = (path, opts = {}) => {
     calls.push({ path, method: opts.method || "GET", body: opts.body });
     return Promise.resolve().then(() => respond(path, opts));
   };
   const factory = new Function(
     "target", "hasStreamScope", "sdk", "initSdk", "api", "clog", "toast", "$",
-    "navigator", "setTimeout", "BUILD", "performance",
+    "navigator", "setTimeout", "BUILD", "performance", "reconnectSdk",
     "let W=null,sdkErrTimes=[],sdkId='dev1';\n"
     + "let sdkReadies=2,sdkReadyAt=Date.now()-9000,lastHiddenMs=82800000;\n"
     + "const LOADED_AT=Date.now()-86400000;\n"
@@ -330,11 +332,11 @@ function freshBegin({ respond = () => null, sdkReady = Promise.resolve("dev1") }
   const page = factory("sdk", () => true, { activateElement: async () => {} },
     () => sdkReady, api, (type, data) => logged.push({ type, data }),
     m => toasts.push(m), () => badge, { userAgent: "test" }, () => 0,
-    "abc1234", { now: () => 0 });
-  const newRun = (n = 3) => ({ live: true, key: "pl1", ws: { tracks: manyTracks(n) },
+    "abc1234", { now: () => 0 }, () => { reconnects.push(1); return reconnect(); });
+  const newRun =(n = 3) => ({ live: true, key: "pl1", ws: { tracks: manyTracks(n) },
     warned: { shuffle: false, noMatch: false, order: false } });
   const sent = () => calls.map(c => c.method + " " + c.path.split("?")[0]);
-  return { ...page, newRun, calls, sent, toasts, logged, badge };
+  return { ...page, newRun, calls, sent, toasts, logged, badge, reconnects };
 }
 
 test("a track-list start sends play FIRST, with nothing queued ahead of it", async () => {
@@ -460,6 +462,130 @@ test("a start records how old the page and its player were, and which device it 
   assert.ok(begin.loadAgoMs >= 86400000, "loadAgoMs: " + begin.loadAgoMs);
   // The tail only: enough to compare two entries, not the whole identifier.
   assert.equal(p.logged.find(l => l.type === "playStart").data.dev, "abcdef");
+});
+
+/* ---- a player Spotify dropped while the page slept ---- */
+
+const playCalls = p => p.calls.filter(c => c.path.startsWith("/me/player/play"));
+/* Answers play with `failures[n]` on the n-th play (an Error to throw, or null). */
+const playScript = failures => {
+  let n = 0;
+  return path => {
+    if (!path.startsWith("/me/player/play")) return null;
+    const f = failures[n++];
+    if (f) throw f;
+    return null;
+  };
+};
+
+test("REGRESSION: a 404 on play re-registers the player and plays on it", async () => {
+  /* data/clientlog 2026-11-24 (and 2026-11-22): after hours suspended, PUT /me/player/play
+   * answered `404 Device not found`, the SDK had never fired not_ready, and both STARTs
+   * dropped the run to SIMULATED. */
+  const p = freshBegin({ respond: playScript([new Error("Spotify 404")]) });
+  const run = p.newRun();
+  p.setW(run);
+  await p.begin();
+  assert.equal(p.reconnects.length, 1);
+  assert.deepEqual(playCalls(p).map(c => c.path.match(/device_id=([^&]+)/)[1]), ["dev1", "dev2"],
+    "the retry must name the device the player re-registered as");
+  assert.equal(run.live, true, "a recovered start must not be marked simulated");
+  assert.deepEqual(p.toasts, []);
+  const types = p.logged.map(l => l.type);
+  assert.ok(types.includes("deviceLost") && types.includes("playRetry") && types.includes("playAck"),
+    types.join(", "));
+  assert.ok(!types.includes("beginFail"));
+  // repeat goes to the new device too
+  await settle();
+  const repeat = p.calls.find(c => c.path.startsWith("/me/player/repeat"));
+  assert.match(repeat.path, /device_id=dev2/);
+});
+
+test("a player that does not come back fails the start as before", async () => {
+  const p = freshBegin({ respond: playScript([new Error("Spotify 404")]), reconnect: async () => null });
+  const run = p.newRun();
+  p.setW(run);
+  await p.begin();
+  assert.equal(playCalls(p).length, 1, "no retry without a device");
+  assert.equal(run.live, false);
+  assert.equal(p.logged.filter(l => l.type === "beginFail").length, 1);
+});
+
+test("a retry that fails too is one failure, not a loop", async () => {
+  const p = freshBegin({ respond: playScript([new Error("Spotify 404"), new Error("Spotify 404")]) });
+  const run = p.newRun();
+  p.setW(run);
+  await p.begin();
+  assert.equal(p.reconnects.length, 1);
+  assert.equal(playCalls(p).length, 2);
+  assert.equal(run.live, false);
+  assert.equal(p.logged.filter(l => l.type === "beginFail").length, 1);
+});
+
+test("only a 404 re-registers the player", async () => {
+  const p = freshBegin({ respond: playScript([new Error("Spotify 502")]) });
+  p.setW(p.newRun());
+  await p.begin();
+  assert.equal(p.reconnects.length, 0);
+  assert.equal(playCalls(p).length, 1);
+});
+
+test("a run replaced while the player re-registers sends no retry", async () => {
+  const back = deferred();
+  const p = freshBegin({ respond: playScript([new Error("Spotify 404")]), reconnect: () => back.promise });
+  p.setW(p.newRun());
+  const old = p.begin();
+  await settle(); await settle();
+  const next = p.newRun();
+  p.setW(next);
+  back.resolve("dev2");
+  await old;
+  assert.equal(playCalls(p).length, 1, "the abandoned start retried play");
+  assert.equal(next.live, true);
+  assert.ok(p.logged.some(l => l.type === "beginAbandoned"));
+});
+
+/* reconnectSdk() against a fake player: what it waits for and what it cleans up. */
+function fakePlayer({ readyId = "dev2", fails = false } = {}) {
+  const listeners = { ready: [] }, calls = [];
+  return {
+    calls, listeners,
+    addListener: (ev, cb) => { (listeners[ev] = listeners[ev] || []).push(cb); },
+    removeListener: (ev, cb) => { listeners[ev] = (listeners[ev] || []).filter(f => f !== cb); },
+    disconnect: () => { calls.push("disconnect"); },
+    connect: async () => {
+      calls.push("connect");
+      if (fails) throw new Error("no");
+      if (readyId) setImmediate(() => listeners.ready.slice().forEach(cb => cb({ device_id: readyId })));
+      return true;
+    },
+  };
+}
+const reconnectWith = (player, timers) => new Function("sdk", "setTimeout", "clearTimeout",
+  extractFunction("reconnectSdk") + "\nreturn reconnectSdk;")(player,
+  timers ? timers.set : setTimeout, timers ? timers.clear : clearTimeout);
+
+test("reconnectSdk disconnects, connects, and resolves with the id from the next ready", async () => {
+  const player = fakePlayer();
+  assert.equal(await reconnectWith(player)(), "dev2");
+  assert.deepEqual(player.calls, ["disconnect", "connect"]);
+  assert.equal(player.listeners.ready.length, 0, "its one-shot ready listener was left behind");
+});
+
+test("reconnectSdk gives up with null when no ready arrives, or connect throws", async () => {
+  let fire = null;
+  const timers = { set: f => { fire = f; return 1; }, clear: () => {} };
+  const silent = fakePlayer({ readyId: null });
+  const pending = reconnectWith(silent, timers)();
+  await settle();
+  fire();                                    // the 6s bound elapses
+  assert.equal(await pending, null);
+  assert.equal(silent.listeners.ready.length, 0);
+  // A connect that throws answers at once, not after the 6s bound: here the timer never fires.
+  const never = { set: () => 1, clear: () => {} };
+  const quick = await Promise.race([reconnectWith(fakePlayer({ fails: true }), never)(),
+    settle().then(settle).then(() => "still waiting")]);
+  assert.equal(quick, null);
 });
 
 test("a context start keeps the full order: transfer, shuffle, repeat, verify, play", async () => {

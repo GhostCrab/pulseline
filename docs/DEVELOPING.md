@@ -197,7 +197,16 @@ together** whenever `ANALYSIS_VERSION` changes:
   `visibilitychange`** (2026-11-24: loaded 19:33, no `hidden`, back at 22:14 with
   `hiddenMs:null`, and Spotify had dropped the device: `404 Device not found`). So a
   once-a-second timer (`beat()`) also counts as evidence: a gap over `FROZEN_MS` (a chosen
-  2 min) logs `frozen` and reloads the splash on its own. Not covered: a run left armed or paused
+  2 min) logs `frozen` and reloads the splash on its own. iOS has no standard signal for
+  this: the Page Lifecycle API's `freeze`/`resume` events exist only in Chromium, and
+  WebKit may suspend the process before `visibilitychange` fires (WebKit bug 207256).
+- **A START that gets `404 Device not found` re-registers the player and retries once**
+  (`reconnectSdk()` in `beginPlayback()`): Spotify drops an in-app device that slept for
+  hours and the SDK does not fire `not_ready`. This is the net that does not depend on
+  detecting the sleep. It reconnects the SAME player, whose audio element the START tap
+  already unlocked; a new player would need a gesture that is spent by then. Logs
+  `deviceLost`, then `playRetry`. It does not cover the 2026-11-15 shape, where Spotify
+  accepted `play` and nothing played; only the reload does. Not covered: a run left armed or paused
   across a long suspend and then started or resumed. That a reload restores a working
   player on iOS is assumed from the force-close, not yet seen on a device.
 - Token refresh is **single-flight** (`refreshToken()` / `ensureToken(force)`, `SKEW_MS = 120000`)
