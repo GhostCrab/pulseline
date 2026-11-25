@@ -194,12 +194,12 @@ test("returning to the app after playback stopped elsewhere still pauses the wor
 
 /* ---- refreshIfStale: a page that has been in the background is replaced ---- */
 
-function freshStale({ target = "sdk", hiddenAt = 1, sdkPlaying = false } = {}) {
+function freshStale({ target = "sdk", hiddenAt = 1, frozenAt = 0, sdkPlaying = false } = {}) {
   const logged = [], calls = [];
   const factory = new Function(
-    "target", "hiddenAt", "sdkPlaying", "lastHiddenMs", "clog", "clogFlush", "location",
+    "target", "hiddenAt", "frozenAt", "sdkPlaying", "lastHiddenMs", "clog", "clogFlush", "location",
     "let reloading=false;\n" + extractFunction("refreshIfStale") + "\nreturn refreshIfStale;");
-  const refresh = factory(target, hiddenAt, sdkPlaying, 82800000,
+  const refresh = factory(target, hiddenAt, frozenAt, sdkPlaying, 82800000,
     (type, data) => { logged.push({ type, data }); calls.push("log"); },
     () => calls.push("flush"), { reload: () => calls.push("reload") });
   return { refresh, logged, calls };
@@ -219,10 +219,54 @@ test("REGRESSION: a page that has been in the background reloads before the next
   assert.equal(p.logged.length, 1, "logged twice");
 });
 
-test("a page that was never hidden is left alone", () => {
+test("a page that was never hidden or frozen is left alone", () => {
   const p = freshStale({ hiddenAt: 0 });
   assert.equal(p.refresh("done"), false);
   assert.deepEqual(p.calls, []);
+});
+
+test("REGRESSION: a page frozen without a hide event still reloads", () => {
+  /* data/clientlog 2026-11-24: loaded 19:33, no `hidden` ever logged, back at 22:14 with
+   * hiddenMs:null, and both STARTs got 404 Device not found. hiddenAt was never set, so
+   * the reload that waited for it did not happen. */
+  const p = freshStale({ hiddenAt: 0, frozenAt: 1 });
+  assert.equal(p.refresh("frozen"), true);
+  assert.deepEqual(p.calls, ["log", "flush", "reload"]);
+});
+
+/* beat(): the freeze detector. lastBeat, frozenAt and the log are the page's own; time
+ * is passed in, so a 2.7h suspension is one call rather than a 2.7h test. */
+function freshBeat(start) {
+  const logged = [];
+  const FROZEN_MS = Number(src.match(/const FROZEN_MS=([\d*]+);/)[1].split("*")
+    .reduce((a, b) => a * Number(b), 1));
+  const factory = new Function("clog", "devTail", "sdkId",
+    "const FROZEN_MS=" + FROZEN_MS + ";\nlet lastBeat=" + start + ",frozenAt=0;\n"
+    + extractFunction("beat") + "\nreturn {beat,frozen:()=>frozenAt};");
+  return { ...factory((type, data) => logged.push({ type, data }), id => id && id.slice(-6),
+    "0123456789abcdef"), logged, FROZEN_MS };
+}
+
+test("a timer that did not run for 2.7 hours records a freeze, once", () => {
+  const b = freshBeat(0);
+  const gap = 9718628;                         // readyAgoMs on the failing START, 2026-11-24
+  assert.equal(b.beat(gap), true);
+  assert.equal(b.frozen(), 0, "the freeze is dated from the last tick before it");
+  assert.deepEqual(b.logged, [{ type: "frozen", data: { gapMs: gap, dev: "abcdef" } }]);
+  // The visibility handler and the timer both call beat() on the way back; only the first sees the gap.
+  assert.equal(b.beat(gap + 5), false);
+  assert.equal(b.logged.length, 1);
+});
+
+test("ordinary ticks, and a throttled background tab, are not a freeze", () => {
+  const b = freshBeat(0);
+  let t = 0;
+  for (let i = 0; i < 100; i++) assert.equal(b.beat(t += 1000), false);
+  // Chrome clamps timers in a hidden tab to about once a minute.
+  assert.equal(b.beat(t += 61000), false);
+  assert.ok(b.FROZEN_MS > 61000, "FROZEN_MS must stay above Chrome's background clamp");
+  assert.equal(b.frozen(), 0);
+  assert.deepEqual(b.logged, []);
 });
 
 test("a page that is still playing the cooldown music is not reloaded under it", () => {
@@ -241,8 +285,12 @@ test("the reload is wired only to the splash and to leaving the completion card"
   // Structural: a reload anywhere else would throw away a run that is armed or running.
   const code = require("./_page.js").stripComments(src);
   const uses = code.match(/refreshIfStale\("[a-z]+"\)/g) || [];
-  assert.deepEqual(uses.sort(), ['refreshIfStale("done")', 'refreshIfStale("visible")']);
+  assert.deepEqual(uses.sort(),
+    ['refreshIfStale("done")', 'refreshIfStale("frozen")', 'refreshIfStale("visible")']);
   assert.match(code, /if\(!W\)refreshIfStale\("visible"\)/);
+  assert.match(code, /if\(beat\(Date\.now\(\)\)&&!W\)refreshIfStale\("frozen"\)/);
+  // The visibility handler records a freeze too, so the order the two run in cannot lose it.
+  assert.match(code, /beat\(Date\.now\(\)\);\s*if\(!W\)refreshIfStale\("visible"\)/);
   assert.match(code, /backToSplash\(\);refreshIfStale\("done"\)/);
 });
 

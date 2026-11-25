@@ -580,8 +580,27 @@ document.addEventListener("visibilitychange",()=>{
   }
   if(hiddenAt)lastHiddenMs=Date.now()-hiddenAt;
   clog("vis",{state:"visible",hiddenMs:lastHiddenMs,dev:devTail(sdkId)});
+  beat(Date.now());                   // a suspension is recorded whichever of these runs first
   if(!W)refreshIfStale("visible");    // on the splash: nothing on screen to lose
 });
+/* A suspension the page was never told about. On 2026-11-24 the page loaded at 19:33,
+   logged no `hidden`, and came back at 22:14 with hiddenMs:null - iOS froze it without
+   a visibilitychange - so refreshIfStale, which waited for a recorded hide, never ran.
+   In those 2.7h Spotify had dropped the device: both STARTs got `404 Device not found`
+   and the SDK never fired not_ready. A timer that should tick every second and did not
+   for minutes is the evidence that needs no event: it runs only while the page runs.
+   FROZEN_MS is a chosen value: well above the once-a-minute clamp Chrome puts on timers
+   in a hidden tab, and far below the gaps that failed (2.7h, overnight). */
+const FROZEN_MS=2*60*1000;
+let lastBeat=Date.now(),frozenAt=0;
+function beat(now){
+  const gap=now-lastBeat;lastBeat=now;
+  if(gap<FROZEN_MS)return false;
+  frozenAt=now-gap;
+  clog("frozen",{gapMs:gap,dev:devTail(sdkId)});
+  return true;
+}
+setInterval(()=>{if(beat(Date.now())&&!W)refreshIfStale("frozen")},1000);
 /* A page that has been in the background gets a NEW page before the next workout.
    The installed iOS app is not restarted when it is reopened: it resumes yesterday's
    page, whose player announces `ready` again and then plays nothing - Spotify accepts
@@ -598,7 +617,7 @@ document.addEventListener("visibilitychange",()=>{
    with no `heard` would disprove it. */
 let sdkPlaying=false,reloading=false;
 function refreshIfStale(why){
-  if(target!=="sdk"||!hiddenAt||sdkPlaying)return false;
+  if(target!=="sdk"||(!hiddenAt&&!frozenAt)||sdkPlaying)return false;
   if(reloading)return true;           // the browser can fire the event again on the way out
   reloading=true;
   clog("staleReload",{why,hiddenMs:lastHiddenMs});

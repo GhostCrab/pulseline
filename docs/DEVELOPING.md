@@ -193,7 +193,11 @@ together** whenever `ANALYSIS_VERSION` changes:
   list reaches the player, and a force-close cures it (`data/clientlog`, 2026-11-13 and
   2026-11-15). The reload happens only on the splash or on leaving the completion card,
   never over a run that is armed or running and never while the page itself is playing
-  (the cooldown music). It logs `staleReload`. Not covered: a run left armed or paused
+  (the cooldown music). It logs `staleReload`. **iOS can freeze the page without any
+  `visibilitychange`** (2026-11-24: loaded 19:33, no `hidden`, back at 22:14 with
+  `hiddenMs:null`, and Spotify had dropped the device: `404 Device not found`). So a
+  once-a-second timer (`beat()`) also counts as evidence: a gap over `FROZEN_MS` (a chosen
+  2 min) logs `frozen` and reloads the splash on its own. Not covered: a run left armed or paused
   across a long suspend and then started or resumed. That a reload restores a working
   player on iOS is assumed from the force-close, not yet seen on a device.
 - Token refresh is **single-flight** (`refreshToken()` / `ensureToken(force)`, `SKEW_MS = 120000`)
